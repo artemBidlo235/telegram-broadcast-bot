@@ -10,7 +10,7 @@ from telethon.tl.custom import Button
 # ========== ВАШИ ДАННЫЕ ==========
 API_ID = 36594021
 API_HASH = '6dfedd148bf6bba5d4e67ed213178ebb'
-BOT_TOKEN = '8779543002:AAEnnD2AeimtSQDptnmVh-OMXR64sLe5xDg'
+BOT_TOKEN = '8297380746:AAHChWZNlbT-_pc70Nr3zUydC6BebI-ao9Q'
 ADMIN_ID = 1031953955
 
 # Настройки рассылки
