@@ -512,20 +512,23 @@ async def main():
     print(f"📁 Папка для сессий: {SESSIONS_DIR}")
     print("💡 Нажмите Ctrl+C для безопасного завершения")
     
+    # ========== БЕСКОНЕЧНОЕ ОЖИДАНИЕ (ВАЖНО ДЛЯ RAILWAY) ==========
+    print("🟢 Бот запущен и ожидает сообщения...")
     await bot_client.run_until_disconnected()
-
-
-def keep_alive():
-    """Держит бота активным"""
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        loop.run_until_complete(main())
-    except KeyboardInterrupt:
-        print("\n👋 Бот остановлен")
-    finally:
-        loop.close()
+    
+    # Если run_until_disconnected почему-то завершился, держим процесс живым
+    while True:
+        await asyncio.sleep(60)
+        print("💓 Бот всё ещё жив...")
 
 
 if __name__ == "__main__":
-    keep_alive()
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\n👋 Бот остановлен вручную")
+    except Exception as e:
+        print(f"❌ Критическая ошибка: {e}")
+        # Не завершаемся, а ждём
+        while True:
+            asyncio.sleep(60)
