@@ -2,11 +2,11 @@ import asyncio
 import sqlite3
 import os
 from telethon import TelegramClient, events
-from telethon.errors import FloodWaitError, ChatWriteForbiddenError
+from telethon.errors import FloodWaitError
 from telethon.tl.custom import Button
 from telethon.sessions import StringSession
-from flask import Flask, request, jsonify
-import threading
+from flask import Flask
+from threading import Thread
 
 # ========== НАСТРОЙКИ ==========
 API_ID = 36594021
@@ -17,6 +17,27 @@ MASTER_ADMIN_ID = 1031953955
 # Настройки рассылки
 DEFAULT_MESSAGE_TEXT = "qwerty"
 DELAY_BETWEEN_MESSAGES = 5
+# ==================================
+
+# ========== FLASK ДЛЯ RAILWAY ==========
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "✅ Бот работает!", 200
+
+@app.route('/health')
+def health():
+    return "OK", 200
+
+def run_flask():
+    port = int(os.environ.get('PORT', 8080))
+    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+
+# Запускаем Flask в отдельном потоке
+thread = Thread(target=run_flask, daemon=True)
+thread.start()
+print("🌐 Веб-сервер запущен")
 # ==================================
 
 # ========== БАЗА ДАННЫХ ==========
@@ -62,7 +83,6 @@ conn = init_db()
 user_clients = {}
 auth_states = {}
 user_message_texts = {}
-bot = None
 # ==================================
 
 # ========== ФУНКЦИИ ДЛЯ РАБОТЫ С БАЗОЙ ==========
@@ -102,12 +122,6 @@ def get_user_sessions(user_id):
     cursor = conn.cursor()
     cursor.execute('SELECT id, session_string, phone_number, first_name, is_active FROM telegram_sessions WHERE owner_user_id = ?', (user_id,))
     return cursor.fetchall()
-
-def set_active_session(user_id, session_id):
-    cursor = conn.cursor()
-    cursor.execute('UPDATE telegram_sessions SET is_active = 0 WHERE owner_user_id = ?', (user_id,))
-    cursor.execute('UPDATE telegram_sessions SET is_active = 1 WHERE id = ? AND owner_user_id = ?', (session_id, user_id))
-    conn.commit()
 
 def delete_user_session(user_id, session_id):
     cursor = conn.cursor()
@@ -238,74 +252,15 @@ def get_main_menu(user_id):
     return menu
 # ============================================
 
-# ========== FLASK ВЕБ-СЕРВЕР ДЛЯ WEBHOOK ==========
-app = Flask(__name__)
-
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    """Принимает обновления от Telegram через webhook"""
-    update = request.get_json()
-    if update:
-        # Асинхронно обрабатываем обновление
-        asyncio.create_task(process_update(update))
-    return jsonify({"status": "ok"}), 200
-
-@app.route('/')
-def home():
-    return "✅ Бот работает!", 200
-
-@app.route('/health')
-def health():
-    return "OK", 200
-
-async def process_update(update):
-    """Обрабатывает входящие обновления"""
-    global bot
-    if bot:
-        # Передаём обновление в Telethon
-        await bot._handle_update(update)
-
-def run_flask():
-    port = int(os.environ.get('PORT', 8080))
-    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
-# ============================================
-
 # ========== ЗАПУСК БОТА ==========
-async def start_bot():
+async def main():
     global bot
-    
-    # Запускаем Flask в отдельном потоке
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-    print("🌐 Flask сервер запущен")
     
     # Создаём клиент бота
-    bot = TelegramClient('bot_session', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
-    
-    # Устанавливаем webhook (вместо long polling)
-    webhook_url = f"https://{os.environ.get('RAILWAY_PUBLIC_DOMAIN', 'localhost')}/webhook"
-    try:
-        await bot.delete_bot_webhook()
-        await bot.set_bot_webhook(webhook_url)
-        print(f"✅ Webhook установлен: {webhook_url}")
-    except Exception as e:
-        print(f"⚠️ Не удалось установить webhook: {e}. Использую long polling...")
-        # Если webhook не работает, используем long polling
-        await bot.run_until_disconnected()
-        return
-    
+    bot = await TelegramClient('bot_session', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
     print("✅ Бот запущен и готов к работе!")
     
-    # Регистрируем обработчики команд (они будут работать через webhook)
-    await register_handlers()
-    
-    # Держим бота активным
-    await bot.run_until_disconnected()
-
-async def register_handlers():
-    """Регистрирует все обработчики команд"""
-    global bot
-    
+    # Регистрируем обработчики
     @bot.on(events.NewMessage(pattern='/start'))
     async def start_handler(event):
         user_id = event.sender_id
@@ -322,7 +277,7 @@ async def register_handlers():
             buttons=get_main_menu(user_id)
         )
     
-    @bot.on(events.NewMessage())
+    @bot.on(events.NewMessage)
     async def message_handler(event):
         user_id = event.sender_id
         text = event.raw_text
@@ -330,7 +285,7 @@ async def register_handlers():
         if not is_user_allowed(user_id):
             return
         
-        # Обработка кнопок и команд (как в предыдущей версии)
+        # --- Запустить рассылку ---
         if text == "📋 Запустить рассылку":
             client = await get_user_client(user_id)
             if not client:
@@ -342,6 +297,7 @@ async def register_handlers():
                 return
             await send_broadcast(user_id, chat_ids, event)
         
+        # --- Поменять базу чатов ---
         elif text == "🔄 Поменять базу чатов":
             client = await get_user_client(user_id)
             if not client:
@@ -358,6 +314,7 @@ async def register_handlers():
                 buttons=[[Button.text("❌ Отмена")]]
             )
         
+        # --- Сменить текст ---
         elif text == "📝 Сменить текст":
             auth_states[user_id] = {'step': 'awaiting_new_text'}
             current_text = user_message_texts.get(user_id, DEFAULT_MESSAGE_TEXT)
@@ -368,6 +325,11 @@ async def register_handlers():
                 buttons=[[Button.text("❌ Отмена")]]
             )
         
+        # --- Остановить рассылку ---
+        elif text == "⏹️ Остановить":
+            await event.reply("ℹ️ Для остановки рассылки перезапустите бота.", buttons=get_main_menu(user_id))
+        
+        # --- Статус ---
         elif text == "📊 Статус":
             client = await get_user_client(user_id)
             if client and client.is_connected():
@@ -388,6 +350,7 @@ async def register_handlers():
                 buttons=get_main_menu(user_id)
             )
         
+        # --- Логин ---
         elif text == "🔑 Логин":
             auth_states[user_id] = {'step': 'awaiting_phone'}
             await event.reply(
@@ -396,6 +359,7 @@ async def register_handlers():
                 buttons=[[Button.text("❌ Отмена")]]
             )
         
+        # --- Мои сессии ---
         elif text == "📁 Мои сессии":
             sessions = get_user_sessions(user_id)
             if not sessions:
@@ -407,6 +371,7 @@ async def register_handlers():
                 msg += f"• {name} ({phone}) {status}\n"
             await event.reply(msg, buttons=get_main_menu(user_id))
         
+        # --- Мои чаты ---
         elif text == "📋 Мои чаты":
             chats = get_user_chats_info(user_id)
             if not chats:
@@ -417,15 +382,44 @@ async def register_handlers():
                 msg += f"• {title}\n  `{chat_id}`\n\n"
             await event.reply(msg, buttons=get_main_menu(user_id))
         
+        # --- Отмена ---
         elif text == "❌ Отмена":
             if user_id in auth_states:
                 del auth_states[user_id]
             await event.reply("❌ Отменено", buttons=get_main_menu(user_id))
         
-        # Обработка состояний (номер, код, ссылки, текст)
+        # --- Добавить пользователя (админ) ---
+        elif text == "👥 Добавить пользователя" and is_user_admin(user_id):
+            auth_states[user_id] = {'step': 'awaiting_new_user_id'}
+            await event.reply(
+                "➕ **Добавление пользователя**\n\n"
+                "Введите Telegram ID пользователя.\n\n"
+                "Отправьте /cancel для отмены.",
+                buttons=[[Button.text("❌ Отмена")]]
+            )
+        
+        # --- Общая статистика (админ) ---
+        elif text == "📊 Общая статистика" and is_user_admin(user_id):
+            cursor = conn.cursor()
+            cursor.execute('SELECT COUNT(*) FROM users')
+            users_count = cursor.fetchone()[0]
+            cursor.execute('SELECT COUNT(*) FROM telegram_sessions')
+            sessions_count = cursor.fetchone()[0]
+            cursor.execute('SELECT COUNT(*) FROM user_chats')
+            chats_count = cursor.fetchone()[0]
+            await event.reply(
+                f"📊 **Общая статистика:**\n\n"
+                f"👥 Пользователей: {users_count}\n"
+                f"📁 Сессий: {sessions_count}\n"
+                f"📋 Чатов в базах: {chats_count}",
+                buttons=get_main_menu(user_id)
+            )
+        
+        # --- Обработка состояний ---
         elif user_id in auth_states:
             state = auth_states[user_id]
             
+            # Ожидание номера телефона
             if state['step'] == 'awaiting_phone' and text.startswith('+'):
                 phone = text
                 state['phone'] = phone
@@ -441,6 +435,7 @@ async def register_handlers():
                     await event.reply(f"❌ {e}", buttons=get_main_menu(user_id))
                     del auth_states[user_id]
             
+            # Ожидание кода
             elif state['step'] == 'awaiting_code' and text.isdigit() and len(text) == 5:
                 code = text
                 temp_client = state['temp_client']
@@ -456,6 +451,7 @@ async def register_handlers():
                     await event.reply(f"❌ {e}", buttons=get_main_menu(user_id))
                     del auth_states[user_id]
             
+            # Ожидание списка ссылок
             elif state['step'] == 'awaiting_chat_links' and text != "❌ Отмена":
                 links = [l.strip() for l in text.split('\n') if l.strip()]
                 if not links:
@@ -485,12 +481,23 @@ async def register_handlers():
                     await event.reply("❌ Не удалось обработать ссылки", buttons=get_main_menu(user_id))
                     del auth_states[user_id]
             
+            # Ожидание нового текста
             elif state['step'] == 'awaiting_new_text' and text != "❌ Отмена":
                 user_message_texts[user_id] = text
                 await event.reply(f"✅ Текст изменён", buttons=get_main_menu(user_id))
                 del auth_states[user_id]
+            
+            # Ожидание ID нового пользователя
+            elif state['step'] == 'awaiting_new_user_id' and text != "❌ Отмена":
+                try:
+                    new_user_id = int(text)
+                    register_user(new_user_id)
+                    await event.reply(f"✅ **Пользователь {new_user_id} добавлен!**", buttons=get_main_menu(user_id))
+                except ValueError:
+                    await event.reply(f"❌ Неверный формат ID.", buttons=get_main_menu(user_id))
+                del auth_states[user_id]
     
-    @bot.on(events.NewMessage())
+    @bot.on(events.NewMessage)
     async def choice_handler(event):
         user_id = event.sender_id
         text = event.raw_text
@@ -502,6 +509,9 @@ async def register_handlers():
                 await event.reply("❌ Нет чатов", buttons=get_main_menu(user_id))
         elif text == "❌ Нет, позже":
             await event.reply("✅ База сохранена", buttons=get_main_menu(user_id))
+    
+    # Запускаем бота
+    await bot.run_until_disconnected()
 
 if __name__ == "__main__":
-    asyncio.run(start_bot())
+    asyncio.run(main())
