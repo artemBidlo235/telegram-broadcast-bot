@@ -412,9 +412,7 @@ async def delete_session(session_name, event):
     except Exception as e:
         await send_and_track(event, f"Ошибка: {e}", user_id=event.sender_id)
         return False
-
-
-# ========== ФУНКЦИИ РАБОТЫ С ЧАТАМИ ==========
+        # ========== ФУНКЦИИ РАБОТЫ С ЧАТАМИ ==========
 async def convert_links_to_ids(links):
     results = []
     seen_links = set()
@@ -591,9 +589,7 @@ async def show_chat_list_edit_menu(event, user_id, list_name):
     ]
     auth_states[user_id] = {'step': 'editing_chat_list', 'edit_list_name': list_name}
     await send_and_track(event, f"Редактирование списка: {list_name}\n\nВыберите действие:", buttons=buttons, user_id=user_id)
-
-
-# ========== ОСНОВНАЯ ФУНКЦИЯ ==========
+    # ========== ОСНОВНАЯ ФУНКЦИЯ ==========
 async def main():
     global user_client, MESSAGE_TEXT, bot_client, is_broadcasting
     
@@ -811,190 +807,11 @@ async def main():
                 if len(user_list) > 3500:
                     user_list += "\n... и ещё"
                     break
-                      await send_and_track(event, user_list, user_id=user_id)
-        
+            await send_and_track(event, user_list, user_id=user_id)
         elif text == "Статистика бота":
+            stats = get_stats()
+                elif text == "Статистика бота":
             stats = get_stats()
             users_count = len(load_users())
             admins_count = len(load_admins())
             await send_and_track(event, f"Статистика бота\n\nПользователей: {users_count}\nАдминистраторов: {admins_count}\nОтправлено: {stats.get('messages_sent', 0)}\nРассылок: {stats.get('broadcasts', 0)}", user_id=user_id)
-        
-        # НАЗАД
-        elif text == "Назад":
-            await show_main_menu(event, user_id)
-        
-        # ОБРАБОТКА ОТМЕНЫ
-        elif text == "Отмена":
-            if user_id in auth_states:
-                del auth_states[user_id]
-            await show_main_menu(event, user_id)
-        
-        # ОБРАБОТКА СОСТОЯНИЙ
-        elif user_id in auth_states:
-            state = auth_states[user_id]
-            
-            if state['step'] == 'adding_admin' and text != "Отмена":
-                try:
-                    new_admin_id = int(text.strip())
-                    success, msg = add_admin(new_admin_id, user_id)
-                    if success:
-                        await send_and_track(event, f"{msg}!", user_id=user_id)
-                        try:
-                            await bot_client.send_message(new_admin_id, "Вам выданы права администратора!")
-                        except:
-                            pass
-                    else:
-                        await send_and_track(event, f"{msg}", user_id=user_id)
-                    del auth_states[user_id]
-                    await show_admin_panel(event, user_id)
-                except ValueError:
-                    await send_and_track(event, "Неверный формат ID", user_id=user_id)
-                    del auth_states[user_id]
-            
-            elif state['step'] == 'removing_admin' and text != "Отмена":
-                try:
-                    admin_id = int(text.strip())
-                    success, msg = remove_admin(admin_id)
-                    await send_and_track(event, f"{msg}", user_id=user_id)
-                    del auth_states[user_id]
-                    await show_admin_panel(event, user_id)
-                except ValueError:
-                    await send_and_track(event, "Неверный формат ID", user_id=user_id)
-                    del auth_states[user_id]
-            
-            elif state['step'] == 'awaiting_new_text' and text != "Отмена":
-                MESSAGE_TEXT = text
-                await send_and_track(event, f"Текст изменён!", user_id=user_id)
-                del auth_states[user_id]
-                await show_settings_menu(event, user_id)
-            
-            elif state['step'] == 'awaiting_phone' and text.startswith('+'):
-                phone = text
-                state['phone'] = phone
-                state['step'] = 'awaiting_code'
-                temp_path = os.path.join(SESSIONS_DIR, f'temp_{user_id}')
-                temp = TelegramClient(temp_path, API_ID, API_HASH)
-                await temp.connect()
-                state['temp'] = temp
-                try:
-                    result = await temp.send_code_request(phone)
-                    state['hash'] = result.phone_code_hash
-                    await send_and_track(event, "Введите код из Telegram", buttons=[[Button.text("Отмена")]], user_id=user_id)
-                except Exception as e:
-                    await send_and_track(event, f"Ошибка: {e}", user_id=user_id)
-                    del auth_states[user_id]
-            
-            elif state['step'] == 'awaiting_code' and text.isdigit() and len(text) == 5:
-                code = text
-                temp = state['temp']
-                try:
-                    await temp.sign_in(phone=state['phone'], code=code, phone_code_hash=state['hash'])
-                    user_client = temp
-                    me = await user_client.get_me()
-                    session_name = f"{me.first_name}_{state['phone'][-5:]}.session"
-                    session_path = os.path.join(SESSIONS_DIR, session_name)
-                    temp_path = os.path.join(SESSIONS_DIR, f'temp_{user_id}.session')
-                    if os.path.exists(session_path):
-                        await user_client.disconnect()
-                        os.remove(temp_path)
-                        await switch_to_session(session_name)
-                        await send_and_track(event, f"Вход выполнен: {me.first_name}", user_id=user_id)
-                    else:
-                        await user_client.disconnect()
-                        await asyncio.sleep(0.5)
-                        os.rename(temp_path, session_path)
-                        await switch_to_session(session_name)
-                        await send_and_track(event, f"Авторизован: {me.first_name}", user_id=user_id)
-                    del auth_states[user_id]
-                    await show_accounts_menu(event, user_id)
-                except Exception as e:
-                    await send_and_track(event, f"Ошибка: {e}", user_id=user_id)
-                    del auth_states[user_id]
-            
-            elif state['step'] == 'creating_chat_list_name' and text != "Отмена":
-                list_name = text.strip()
-                if list_name in get_chat_lists():
-                    await send_and_track(event, f"Список с именем {list_name} уже существует!", user_id=user_id)
-                    del auth_states[user_id]
-                    await show_chat_lists_menu(event, user_id)
-                else:
-                    auth_states[user_id] = {'step': 'creating_chat_list_content', 'list_name': list_name}
-                    await send_and_track(event, f"Отправьте список ссылок для списка {list_name}:\n\nПример:\n@chat1\nhttps://t.me/chat2", buttons=[[Button.text("Отмена")]], user_id=user_id)
-            
-            elif state['step'] == 'creating_chat_list_content' and text != "Отмена":
-                list_name = state['list_name']
-                links = [l.strip() for l in text.split('\n') if l.strip()]
-                if not links:
-                    await send_and_track(event, "Пустой список", user_id=user_id)
-                    return
-                await send_and_track(event, f"Обрабатываю {len(links)} ссылок...", user_id=user_id)
-                results, dups = await convert_links_to_ids(links)
-                ok = [r for r in results if r['success']]
-                bad = [r for r in results if not r['success']]
-                if ok:
-                    chat_ids = [r['id'] for r in ok]
-                    chat_links = [r['link'] for r in ok]
-                    save_chat_list(list_name, chat_ids, chat_links)
-                    msg = f"Список {list_name} сохранён! Добавлено {len(ok)} чатов"
-                    if bad:
-                        msg += f"\nОшибок: {len(bad)}"
-                    await send_and_track(event, msg, user_id=user_id)
-                else:
-                    await send_and_track(event, "Не удалось обработать ссылки", user_id=user_id)
-                del auth_states[user_id]
-                await show_chat_lists_menu(event, user_id)
-            
-            elif state['step'] == 'adding_links_to_list' and text != "Отмена":
-                list_name = state['edit_list_name']
-                links = [l.strip() for l in text.split('\n') if l.strip()]
-                await send_and_track(event, f"Обрабатываю {len(links)} ссылок...", user_id=user_id)
-                results, dups = await convert_links_to_ids(links)
-                ok = [r for r in results if r['success']]
-                if ok:
-                    chat_ids, chat_links, _ = load_chat_list(list_name)
-                    new_ids = chat_ids + [r['id'] for r in ok]
-                    new_links = chat_links + [r['link'] for r in ok]
-                    save_chat_list(list_name, new_ids, new_links)
-                    await send_and_track(event, f"Добавлено {len(ok)} чатов в список {list_name}", user_id=user_id)
-                else:
-                    await send_and_track(event, "Не удалось обработать ссылки", user_id=user_id)
-                del auth_states[user_id]
-                await show_chat_lists_menu(event, user_id)
-            
-            elif state['step'] == 'overwrite_chat_list' and text != "Отмена":
-                list_name = state['edit_list_name']
-                links = [l.strip() for l in text.split('\n') if l.strip()]
-                await send_and_track(event, f"Обрабатываю {len(links)} ссылок...", user_id=user_id)
-                results, dups = await convert_links_to_ids(links)
-                ok = [r for r in results if r['success']]
-                if ok:
-                    chat_ids = [r['id'] for r in ok]
-                    chat_links = [r['link'] for r in ok]
-                    save_chat_list(list_name, chat_ids, chat_links)
-                    await send_and_track(event, f"Список {list_name} перезаписан! Сохранено {len(ok)} чатов", user_id=user_id)
-                else:
-                    await send_and_track(event, "Не удалось обработать ссылки", user_id=user_id)
-                del auth_states[user_id]
-                await show_chat_lists_menu(event, user_id)
-            
-            elif state['step'] == 'viewing_chat_list' and text != "Назад":
-                list_name = state['list_name']
-                chat_ids, chat_links, _ = load_chat_list(list_name)
-                if text == "По ID":
-                    if chat_ids:
-                        msg = "ID чатов:\n\n" + "\n".join([str(cid) for cid in chat_ids])
-                        if len(msg) > 4000:
-                            msg = msg[:4000] + "\n\n... и ещё"
-                        await send_and_track(event, msg, user_id=user_id)
-                    else:
-                        await send_and_track(event, "Список пуст", user_id=user_id)
-                elif text == "По ссылкам":
-                    if chat_links:
-                        msg = "Ссылки на чаты:\n\n" + "\n".join(chat_links)
-                        if len(msg) > 4000:
-                            msg = msg[:4000] + "\n\n... и ещё"
-                        await send_and_track(event, msg, user_id=user_id)
-                    else:
-                        await send_and_track(event, "Список пуст", user_id=user_id)
-                del auth_states[user_id]
-                await show_chat_lists_menu(event, user_id)
