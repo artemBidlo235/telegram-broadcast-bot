@@ -34,7 +34,6 @@ def run_flask():
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
 
-# Запускаем Flask в отдельном потоке
 thread = Thread(target=run_flask, daemon=True)
 thread.start()
 print("🌐 Веб-сервер запущен")
@@ -254,39 +253,44 @@ def get_main_menu(user_id):
 
 # ========== ЗАПУСК БОТА ==========
 async def main():
-    global bot
-    
     # Создаём клиент бота
     bot = await TelegramClient('bot_session', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
     print("✅ Бот запущен и готов к работе!")
     
-    # Регистрируем обработчики
-    @bot.on(events.NewMessage(pattern='/start'))
-    async def start_handler(event):
-        user_id = event.sender_id
-        register_user(user_id)
-        if not is_user_allowed(user_id):
-            await event.reply("⛔ У вас нет доступа. Обратитесь к администратору.")
-            return
-        await event.reply(
-            "🤖 **Мульти-пользовательский бот рассыльщик**\n\n"
-            "📌 **Возможности:**\n"
-            "• Авторизуйте свой аккаунт через 🔑 Логин\n"
-            "• Добавьте чаты через 🔄 Поменять базу чатов\n"
-            "• Запустите рассылку через 📋 Запустить рассылку",
-            buttons=get_main_menu(user_id)
-        )
-    
+    # Единый обработчик всех сообщений
     @bot.on(events.NewMessage)
-    async def message_handler(event):
+    async def all_messages_handler(event):
         user_id = event.sender_id
         text = event.raw_text
         
-        if not is_user_allowed(user_id):
+        # Игнорируем сообщения от самого бота
+        if user_id == (await bot.get_me()).id:
             return
         
-        # --- Запустить рассылку ---
-        if text == "📋 Запустить рассылку":
+        print(f"📩 Получено сообщение от {user_id}: {text[:50]}")
+        
+        # Регистрируем пользователя, если его нет
+        register_user(user_id)
+        
+        if not is_user_allowed(user_id):
+            await event.reply("⛔ У вас нет доступа. Обратитесь к администратору.")
+            return
+        
+        # ========== ОБРАБОТКА КОМАНД И КНОПОК ==========
+        
+        # /start
+        if text == '/start':
+            await event.reply(
+                "🤖 **Мульти-пользовательский бот рассыльщик**\n\n"
+                "📌 **Возможности:**\n"
+                "• Авторизуйте свой аккаунт через 🔑 Логин\n"
+                "• Добавьте чаты через 🔄 Поменять базу чатов\n"
+                "• Запустите рассылку через 📋 Запустить рассылку",
+                buttons=get_main_menu(user_id)
+            )
+        
+        # Запустить рассылку
+        elif text == "📋 Запустить рассылку":
             client = await get_user_client(user_id)
             if not client:
                 await event.reply("❌ Авторизуйтесь: 🔑 Логин", buttons=get_main_menu(user_id))
@@ -297,7 +301,7 @@ async def main():
                 return
             await send_broadcast(user_id, chat_ids, event)
         
-        # --- Поменять базу чатов ---
+        # Поменять базу чатов
         elif text == "🔄 Поменять базу чатов":
             client = await get_user_client(user_id)
             if not client:
@@ -314,7 +318,7 @@ async def main():
                 buttons=[[Button.text("❌ Отмена")]]
             )
         
-        # --- Сменить текст ---
+        # Сменить текст
         elif text == "📝 Сменить текст":
             auth_states[user_id] = {'step': 'awaiting_new_text'}
             current_text = user_message_texts.get(user_id, DEFAULT_MESSAGE_TEXT)
@@ -325,11 +329,7 @@ async def main():
                 buttons=[[Button.text("❌ Отмена")]]
             )
         
-        # --- Остановить рассылку ---
-        elif text == "⏹️ Остановить":
-            await event.reply("ℹ️ Для остановки рассылки перезапустите бота.", buttons=get_main_menu(user_id))
-        
-        # --- Статус ---
+        # Статус
         elif text == "📊 Статус":
             client = await get_user_client(user_id)
             if client and client.is_connected():
@@ -350,7 +350,7 @@ async def main():
                 buttons=get_main_menu(user_id)
             )
         
-        # --- Логин ---
+        # Логин
         elif text == "🔑 Логин":
             auth_states[user_id] = {'step': 'awaiting_phone'}
             await event.reply(
@@ -359,7 +359,7 @@ async def main():
                 buttons=[[Button.text("❌ Отмена")]]
             )
         
-        # --- Мои сессии ---
+        # Мои сессии
         elif text == "📁 Мои сессии":
             sessions = get_user_sessions(user_id)
             if not sessions:
@@ -371,7 +371,7 @@ async def main():
                 msg += f"• {name} ({phone}) {status}\n"
             await event.reply(msg, buttons=get_main_menu(user_id))
         
-        # --- Мои чаты ---
+        # Мои чаты
         elif text == "📋 Мои чаты":
             chats = get_user_chats_info(user_id)
             if not chats:
@@ -382,13 +382,17 @@ async def main():
                 msg += f"• {title}\n  `{chat_id}`\n\n"
             await event.reply(msg, buttons=get_main_menu(user_id))
         
-        # --- Отмена ---
+        # Остановить
+        elif text == "⏹️ Остановить":
+            await event.reply("ℹ️ Для остановки рассылки перезапустите бота.", buttons=get_main_menu(user_id))
+        
+        # Отмена
         elif text == "❌ Отмена":
             if user_id in auth_states:
                 del auth_states[user_id]
             await event.reply("❌ Отменено", buttons=get_main_menu(user_id))
         
-        # --- Добавить пользователя (админ) ---
+        # Добавить пользователя (админ)
         elif text == "👥 Добавить пользователя" and is_user_admin(user_id):
             auth_states[user_id] = {'step': 'awaiting_new_user_id'}
             await event.reply(
@@ -398,7 +402,7 @@ async def main():
                 buttons=[[Button.text("❌ Отмена")]]
             )
         
-        # --- Общая статистика (админ) ---
+        # Общая статистика (админ)
         elif text == "📊 Общая статистика" and is_user_admin(user_id):
             cursor = conn.cursor()
             cursor.execute('SELECT COUNT(*) FROM users')
@@ -415,7 +419,18 @@ async def main():
                 buttons=get_main_menu(user_id)
             )
         
-        # --- Обработка состояний ---
+        # Кнопки "Да" и "Нет" после сохранения чатов
+        elif text == "✅ Да, запустить рассылку":
+            chat_ids = load_user_chats(user_id)
+            if chat_ids:
+                await send_broadcast(user_id, chat_ids, event)
+            else:
+                await event.reply("❌ Нет чатов", buttons=get_main_menu(user_id))
+        
+        elif text == "❌ Нет, позже":
+            await event.reply("✅ База сохранена", buttons=get_main_menu(user_id))
+        
+        # ========== ОБРАБОТКА СОСТОЯНИЙ (ввод номера, кода, ссылок) ==========
         elif user_id in auth_states:
             state = auth_states[user_id]
             
@@ -496,19 +511,6 @@ async def main():
                 except ValueError:
                     await event.reply(f"❌ Неверный формат ID.", buttons=get_main_menu(user_id))
                 del auth_states[user_id]
-    
-    @bot.on(events.NewMessage)
-    async def choice_handler(event):
-        user_id = event.sender_id
-        text = event.raw_text
-        if text == "✅ Да, запустить рассылку":
-            chat_ids = load_user_chats(user_id)
-            if chat_ids:
-                await send_broadcast(user_id, chat_ids, event)
-            else:
-                await event.reply("❌ Нет чатов", buttons=get_main_menu(user_id))
-        elif text == "❌ Нет, позже":
-            await event.reply("✅ База сохранена", buttons=get_main_menu(user_id))
     
     # Запускаем бота
     await bot.run_until_disconnected()
