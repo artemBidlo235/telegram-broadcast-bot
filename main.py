@@ -29,8 +29,8 @@ API_ID = int(os.getenv("API_ID", 36594021))
 API_HASH = os.getenv("API_HASH", "6dfedd148bf6bba5d4e67ed213178ebb")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8297380746:AAHChWZNlbT-_pc70Nr3zUydC6BebI-ao9Q")
 
-print(f"✅ API_ID загружен: {API_ID}")
-print(f"✅ BOT_TOKEN (первые 10 символов): {BOT_TOKEN[:10]}...")
+print(f"✅ API_ID: {API_ID}")
+print(f"✅ BOT_TOKEN: {BOT_TOKEN[:10]}...")
 
 # Настройки рассылки
 MESSAGE_TEXT = "qwerty"
@@ -55,6 +55,7 @@ is_broadcasting = False
 target_chat_ids = []
 auth_states = {}
 bot_client = None
+
 
 # ========== РАБОТА С АДМИНАМИ ==========
 def load_admins():
@@ -229,6 +230,21 @@ if FLASK_AVAILABLE:
         </html>
         """
     
+    @app.route('/api/users')
+    def api_users():
+        return jsonify(load_users())
+    
+    @app.route('/api/admins')
+    def api_admins():
+        return jsonify(load_admins())
+    
+    @app.route('/api/stats')
+    def api_stats():
+        stats = get_stats()
+        stats['total_users'] = len(load_users())
+        stats['total_admins'] = len(load_admins())
+        return jsonify(stats)
+    
     def run_web_server():
         port = int(os.environ.get("PORT", 8080))
         app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
@@ -237,7 +253,182 @@ else:
         print("⚠️ Веб-сервер не запущен")
 
 
-# ========== ОСНОВНАЯ ЛОГИКА БОТА ==========
+# ========== ФУНКЦИИ УПРАВЛЕНИЯ СЕССИЯМИ ==========
+def save_active_session(session_name):
+    try:
+        with open(ACTIVE_SESSION_FILE, 'w', encoding='utf-8') as f:
+            f.write(session_name)
+        print(f"💾 Сохранена сессия: {session_name}")
+        return True
+    except Exception as e:
+        print(f"❌ Ошибка сохранения: {e}")
+        return False
+
+
+def load_active_session():
+    try:
+        with open(ACTIVE_SESSION_FILE, 'r', encoding='utf-8') as f:
+            session_name = f.read().strip()
+            session_path = os.path.join(SESSIONS_DIR, session_name)
+            if session_name and os.path.exists(session_path):
+                print(f"📁 Загружена сессия: {session_name}")
+                return session_name
+    except:
+        pass
+    return None
+
+
+def get_session_files():
+    session_files = glob.glob(os.path.join(SESSIONS_DIR, "*.session"))
+    sessions = []
+    for f in session_files:
+        basename = os.path.basename(f)
+        if not basename.startswith('bot_session') and not basename.startswith('temp_'):
+            sessions.append(basename)
+    return sessions
+
+
+def get_session_path(session_name):
+    return os.path.join(SESSIONS_DIR, session_name)
+
+
+def get_current_session_name():
+    if user_client and hasattr(user_client, 'session') and user_client.session:
+        try:
+            return os.path.basename(str(user_client.session.filename))
+        except:
+            return None
+    return None
+
+
+async def force_close_current_session():
+    global user_client
+    if user_client:
+        try:
+            if user_client.is_connected():
+                await user_client.disconnect()
+            session_path = str(user_client.session.filename)
+            for ext in ['.lock', '.journal']:
+                f = session_path + ext
+                if os.path.exists(f):
+                    try:
+                        os.remove(f)
+                    except:
+                        pass
+            user_client = None
+            await asyncio.sleep(0.5)
+            print("✅ Сессия закрыта")
+        except:
+            pass
+
+
+async def switch_to_session(session_name, event=None):
+    global user_client
+    print(f"🔄 Переключение на сессию: {session_name}")
+    await force_close_current_session()
+    session_path = get_session_path(session_name)
+    
+    try:
+        new_client = TelegramClient(session_path, API_ID, API_HASH)
+        await new_client.connect()
+        
+        if await new_client.is_user_authorized():
+            user_client = new_client
+            save_active_session(session_name)
+            me = await user_client.get_me()
+            msg = f"✅ Переключено на: {me.first_name}\n📁 Сессия: {session_name}"
+            if event:
+                await event.reply(msg)
+            print(msg)
+            return True, msg
+        else:
+            await new_client.disconnect()
+            msg = f"❌ Сессия {session_name} не авторизована"
+            if event:
+                await event.reply(msg)
+            print(msg)
+            return False, msg
+    except Exception as e:
+        msg = f"❌ Ошибка при переключении: {e}"
+        if event:
+            await event.reply(msg)
+        print(msg)
+        return False, msg
+
+
+async def delete_session(session_name, event):
+    current = get_current_session_name()
+    if current == session_name:
+        await event.reply("⚠️ Нельзя удалить активную сессию")
+        return False
+    session_path = get_session_path(session_name)
+    try:
+        os.remove(session_path)
+        for ext in ['.json', '.lock', '.journal']:
+            f = session_path + ext
+            if os.path.exists(f):
+                os.remove(f)
+        await event.reply(f"✅ Сессия {session_name} удалена")
+        return True
+    except Exception as e:
+        await event.reply(f"❌ Ошибка: {e}")
+        return False
+
+
+# ========== ФУНКЦИИ РАБОТЫ С ЧАТАМИ ==========
+def load_chat_ids_from_file():
+    chat_ids = []
+    try:
+        with open('chat.txt', 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#'):
+                    try:
+                        chat_ids.append(int(line))
+                    except:
+                        pass
+    except:
+        pass
+    return chat_ids
+
+
+def save_chat_ids_to_file(chat_ids):
+    try:
+        with open('chat.txt', 'w', encoding='utf-8') as f:
+            for chat_id in chat_ids:
+                f.write(f"{chat_id}\n")
+        return True
+    except:
+        return False
+
+
+async def convert_links_to_ids(links):
+    results = []
+    seen_links = set()
+    duplicates = []
+    for link in links:
+        if link in seen_links:
+            duplicates.append(link)
+        else:
+            seen_links.add(link)
+    for link in seen_links:
+        try:
+            entity = await user_client.get_entity(link)
+            results.append({
+                'link': link,
+                'id': entity.id,
+                'title': getattr(entity, 'title', None) or getattr(entity, 'first_name', 'Без названия'),
+                'success': True
+            })
+        except Exception as e:
+            results.append({
+                'link': link,
+                'error': str(e),
+                'success': False
+            })
+    return results, duplicates
+
+
 async def send_broadcast_to_chats(chat_ids, event):
     global is_broadcasting, user_client, MESSAGE_TEXT
     
@@ -285,11 +476,11 @@ async def send_broadcast_to_chats(chat_ids, event):
 
 
 async def main():
-    global user_client, MESSAGE_TEXT, bot_client
+    global user_client, MESSAGE_TEXT, bot_client, is_broadcasting
     
     print("🔵 1. Начало main()")
     
-    # Запускаем веб-сервер в отдельном потоке
+    # Запускаем веб-сервер
     print("🌐 Запуск веб-сервера...")
     web_thread = Thread(target=run_web_server, daemon=True)
     web_thread.start()
@@ -299,15 +490,15 @@ async def main():
     print("🔵 2. После задержки")
     
     # Запуск бота
-    print("🔵 3. Пытаюсь создать клиента Telegram...")
     max_retries = 3
+    bot_client = None
     
     for attempt in range(max_retries):
         try:
             unique_session = f'bot_session_{uuid.uuid4().hex[:8]}'
-            print(f"🔵 Попытка {attempt + 1}: создаю сессию {unique_session}")
+            print(f"🔵 Пытаюсь запустить бота с сессией: {unique_session}")
             bot_client = await TelegramClient(unique_session, API_ID, API_HASH).start(bot_token=BOT_TOKEN)
-            print("✅ БОТ УСПЕШНО ЗАПУЩЕН!")
+            print("✅ Бот запущен")
             break
         except FloodWaitError as e:
             wait_time = e.seconds
@@ -316,26 +507,360 @@ async def main():
                 print(f"⏳ Жду {wait_time} секунд...")
                 await asyncio.sleep(wait_time)
             else:
-                print("❌ Все попытки исчерпаны. Бот не может запуститься.")
+                print("❌ Все попытки исчерпаны")
                 return
         except Exception as e:
-            print(f"❌ ОШИБКА при запуске бота: {type(e).__name__}: {e}")
+            print(f"❌ Ошибка запуска бота: {e}")
             return
     
-    print("🔵 4. Бот создан, регистрирую обработчики...")
+    print("🔵 3. Бот создан")
     
-    # Простой тестовый обработчик
+    # Меню для обычного пользователя
+    user_menu_buttons = [
+        [Button.text("📊 Статус")],
+        [Button.text("ℹ️ О боте")]
+    ]
+    
+    # Меню для администратора (полная версия)
+    admin_menu_buttons = [
+        [Button.text("📋 Запустить рассылку (по чатам)")],
+        [Button.text("📢 Рассылка пользователям")],
+        [Button.text("🔄 Поменять базу чатов")],
+        [Button.text("📝 Сменить текст"), Button.text("⏹️ Остановить")],
+        [Button.text("📊 Статус"), Button.text("🔑 Логин")],
+        [Button.text("📁 Управление сессиями"), Button.text("👥 Пользователи")],
+        [Button.text("👑 Управление админами"), Button.text("📈 Статистика")],
+        [Button.text("◀️ Назад")]
+    ]
+    
+    print("🔵 4. Меню создано")
+    
+    # Загружаем последнюю сессию пользователя
+    last_session = load_active_session()
+    if last_session:
+        print(f"🔵 Загружаем сессию: {last_session}")
+        await switch_to_session(last_session)
+    
+    print("🔵 5. Регистрирую обработчики...")
+    
+    # ========== ОБРАБОТЧИКИ ==========
+    
+    @bot_client.on(events.NewMessage(pattern='/start'))
+    async def start_handler(event):
+        user_id = event.sender_id
+        first_name = event.sender.first_name
+        username = event.sender.username
+        
+        add_user(user_id, first_name, username)
+        
+        if is_admin(user_id):
+            role = "Владелец" if is_owner(user_id) else "Администратор"
+            await event.reply(f"👋 Привет, {first_name}!\n\n👑 Ваша роль: {role}\n\n✅ Вам доступны все функции бота.", buttons=admin_menu_buttons)
+        else:
+            await event.reply(f"👋 Привет, {first_name}!\n\n✅ Вы зарегистрированы как пользователь.\n\nОжидайте сообщений от администратора.", buttons=user_menu_buttons)
+    
     @bot_client.on(events.NewMessage)
-    async def test_handler(event):
-        print(f"📨 Получено сообщение от {event.sender_id}: {event.raw_text}")
-        if event.raw_text == "/test":
-            await event.reply("✅ Бот работает!")
+    async def unified_handler(event):
+        global target_chat_ids, is_broadcasting, MESSAGE_TEXT, user_client
+        
+        user_id = event.sender_id
+        text = event.raw_text
+        
+        print(f"📨 Получено: {text} от {user_id}")
+        
+        # Добавляем пользователя в базу
+        if not text.startswith('/'):
+            add_user(user_id, event.sender.first_name, event.sender.username)
+        
+        # Не админ - только простые команды
+        if not is_admin(user_id):
+            if text == "📊 Статус" or text == "/status":
+                stats = get_stats()
+                users_count = len(load_users())
+                await event.reply(f"📊 Статус бота\n👥 Пользователей: {users_count}\n📨 Отправлено: {stats.get('messages_sent', 0)}")
+            elif text == "ℹ️ О боте":
+                await event.reply("🤖 Бот для управления рассылками\nВерсия: 2.0")
+            return
+        
+        # ========== АДМИН-ФУНКЦИИ ==========
+        
+        # Управление админами (только для владельца)
+        if text == "👑 Управление админами":
+            if not is_owner(user_id):
+                await event.reply("❌ Только владелец может управлять администраторами!", buttons=admin_menu_buttons)
+                return
+            
+            admins = get_admins_list()
+            admin_list = "👑 **Администраторы:**\n\n"
+            for a in admins:
+                admin_list += f"🆔 {a['id']} - {a['role']}\n"
+            
+            buttons = [
+                [Button.text("➕ Добавить админа")],
+                [Button.text("➖ Удалить админа")],
+                [Button.text("◀️ Назад")]
+            ]
+            await event.reply(admin_list, buttons=buttons)
+        
+        elif text == "➕ Добавить админа":
+            if not is_owner(user_id):
+                return
+            auth_states[user_id] = {'step': 'adding_admin'}
+            await event.reply("👑 Введите ID пользователя:", buttons=[[Button.text("❌ Отмена")]])
+        
+        elif text == "➖ Удалить админа":
+            if not is_owner(user_id):
+                return
+            auth_states[user_id] = {'step': 'removing_admin'}
+            await event.reply("👑 Введите ID администратора для удаления:", buttons=[[Button.text("❌ Отмена")]])
+        
+        # Основные функции
+        elif text == "📋 Запустить рассылку (по чатам)":
+            if not user_client or not user_client.is_connected():
+                await event.reply("❌ Авторизуйтесь: 🔑 Логин", buttons=admin_menu_buttons)
+                return
+            chat_ids = load_chat_ids_from_file()
+            if not chat_ids:
+                await event.reply("❌ Нет чатов. Нажмите 🔄 Поменять базу", buttons=admin_menu_buttons)
+                return
+            await send_broadcast_to_chats(chat_ids, event)
+        
+        elif text == "📢 Рассылка пользователям":
+            users = load_users()
+            if not users:
+                await event.reply("❌ Нет зарегистрированных пользователей", buttons=admin_menu_buttons)
+                return
+            auth_states[user_id] = {'step': 'broadcast_to_users'}
+            await event.reply(f"📢 Отправьте сообщение для рассылки {len(users)} пользователям:", buttons=[[Button.text("❌ Отмена")]])
+        
+        elif text == "🔄 Поменять базу чатов":
+            if not user_client or not user_client.is_connected():
+                await event.reply("❌ Сначала авторизуйтесь", buttons=admin_menu_buttons)
+                return
+            auth_states[user_id] = {'step': 'awaiting_chat_links'}
+            await event.reply("📋 Отправьте список ссылок (по одной на строку):\n\nПример:\n@chat1\nhttps://t.me/chat2", buttons=[[Button.text("❌ Отмена")]])
+        
+        elif text == "📝 Сменить текст":
+            auth_states[user_id] = {'step': 'awaiting_new_text'}
+            await event.reply(f"📝 Текущий текст:\n{MESSAGE_TEXT}\n\nОтправьте новый текст:", buttons=[[Button.text("❌ Отмена")]])
+        
+        elif text == "⏹️ Остановить":
+            if is_broadcasting:
+                is_broadcasting = False
+                await event.reply("⏸️ Рассылка остановлена", buttons=admin_menu_buttons)
+            else:
+                await event.reply("ℹ️ Рассылка не активна", buttons=admin_menu_buttons)
+        
+        elif text == "📊 Статус":
+            if user_client and user_client.is_connected():
+                try:
+                    me = await user_client.get_me()
+                    acc = f"✅ {me.first_name}"
+                except:
+                    acc = "❌ Ошибка"
+            else:
+                acc = "❌ Не авторизован"
+            chat_ids = load_chat_ids_from_file()
+            await event.reply(f"👤 {acc}\n📁 {get_current_session_name() or 'Нет'}\n📝 {MESSAGE_TEXT[:50]}\n📋 {len(chat_ids)} чатов", buttons=admin_menu_buttons)
+        
+        elif text == "🔑 Логин":
+            auth_states[user_id] = {'step': 'awaiting_phone'}
+            await event.reply("📱 Введите номер телефона (пример: +12399230271)", buttons=[[Button.text("❌ Отмена")]])
+        
+        elif text == "📁 Управление сессиями":
+            sessions = get_session_files()
+            current = get_current_session_name()
+            buttons = []
+            for s in sessions:
+                if s == current:
+                    buttons.append([Button.text(f"✅ {s} (активна)")])
+                else:
+                    buttons.append([Button.text(f"🔑 {s}"), Button.text(f"🗑️ {s}")])
+            if not sessions:
+                await event.reply("📁 Сессии не найдены", buttons=[[Button.text("◀️ Назад")]])
+                return
+            buttons.append([Button.text("◀️ Назад")])
+            await event.reply(f"📁 Управление сессиями\nТекущая: {current or 'Нет'}\nВсего: {len(sessions)}", buttons=buttons)
+        
+        elif text == "👥 Пользователи":
+            users = load_users()
+            if not users:
+                await event.reply("📭 Нет зарегистрированных пользователей")
+                return
+            user_list = "👥 **Пользователи:**\n\n"
+            for uid, data in users.items():
+                user_list += f"🆔 ID: `{uid}`\n👤 {data.get('first_name', '?')}\n📅 {data.get('joined_at', '?')[:10]}\n\n"
+                if len(user_list) > 3500:
+                    user_list += f"\n... и ещё {len(users) - len(user_list.split('\\n\\n'))} пользователей"
+                    break
+            await event.reply(user_list, buttons=admin_menu_buttons)
+        
+        elif text == "📈 Статистика":
+            stats = get_stats()
+            users_count = len(load_users())
+            admins_count = len(load_admins())
+            await event.reply(f"""
+📊 **Статистика бота**
+
+👥 Пользователей: {users_count}
+👑 Администраторов: {admins_count}
+📨 Отправлено: {stats.get('messages_sent', 0)}
+📢 Рассылок: {stats.get('broadcasts', 0)}
+
+📁 Активная сессия: {get_current_session_name() or 'Нет'}
+✅ Бот работает стабильно
+""", buttons=admin_menu_buttons)
+        
+        elif text == "◀️ Назад":
+            await event.reply("🔙 Главное меню", buttons=admin_menu_buttons)
+        
+        elif text.startswith("🔑 "):
+            session_name = text[2:]
+            success, msg = await switch_to_session(session_name, event)
+            if success:
+                await event.reply("🔙 Возврат в главное меню", buttons=admin_menu_buttons)
+        
+        elif text.startswith("🗑️ "):
+            session_name = text[2:]
+            await delete_session(session_name, event)
+        
+        elif text == "❌ Отмена":
+            if user_id in auth_states:
+                del auth_states[user_id]
+            await event.reply("❌ Отменено", buttons=admin_menu_buttons)
+        
+        # Обработка состояний
+        elif user_id in auth_states:
+            state = auth_states[user_id]
+            
+            # Добавление админа
+            if state['step'] == 'adding_admin' and text != "❌ Отмена":
+                try:
+                    new_admin_id = int(text.strip())
+                    success, msg = add_admin(new_admin_id, user_id)
+                    if success:
+                        await event.reply(f"✅ {msg}!", buttons=admin_menu_buttons)
+                        try:
+                            await bot_client.send_message(new_admin_id, "🎉 Вам выданы права администратора!")
+                        except:
+                            pass
+                    else:
+                        await event.reply(f"❌ {msg}", buttons=admin_menu_buttons)
+                    del auth_states[user_id]
+                except ValueError:
+                    await event.reply("❌ Неверный формат ID", buttons=admin_menu_buttons)
+                    del auth_states[user_id]
+            
+            # Удаление админа
+            elif state['step'] == 'removing_admin' and text != "❌ Отмена":
+                try:
+                    admin_id = int(text.strip())
+                    success, msg = remove_admin(admin_id)
+                    await event.reply(f"✅ {msg}" if success else f"❌ {msg}", buttons=admin_menu_buttons)
+                    del auth_states[user_id]
+                except ValueError:
+                    await event.reply("❌ Неверный формат ID", buttons=admin_menu_buttons)
+                    del auth_states[user_id]
+            
+            # Рассылка пользователям
+            elif state['step'] == 'broadcast_to_users' and text != "❌ Отмена":
+                users = load_users()
+                success = 0
+                fail = 0
+                status_msg = await event.reply(f"🚀 Рассылка {len(users)} пользователям...")
+                for uid in users:
+                    try:
+                        await bot_client.send_message(int(uid), text)
+                        success += 1
+                    except:
+                        fail += 1
+                    await asyncio.sleep(0.3)
+                await status_msg.edit(f"✅ Рассылка завершена!\n✅ {success}\n❌ {fail}")
+                update_stats(success)
+                del auth_states[user_id]
+            
+            # Логин по телефону
+            elif state['step'] == 'awaiting_phone' and text.startswith('+'):
+                phone = text
+                state['phone'] = phone
+                state['step'] = 'awaiting_code'
+                temp_path = os.path.join(SESSIONS_DIR, f'temp_{user_id}')
+                temp = TelegramClient(temp_path, API_ID, API_HASH)
+                await temp.connect()
+                state['temp'] = temp
+                try:
+                    result = await temp.send_code_request(phone)
+                    state['hash'] = result.phone_code_hash
+                    await event.reply("🔑 Введите код из Telegram", buttons=[[Button.text("❌ Отмена")]])
+                except Exception as e:
+                    await event.reply(f"❌ {e}", buttons=admin_menu_buttons)
+                    del auth_states[user_id]
+            
+            elif state['step'] == 'awaiting_code' and text.isdigit() and len(text) == 5:
+                code = text
+                temp = state['temp']
+                try:
+                    await temp.sign_in(phone=state['phone'], code=code, phone_code_hash=state['hash'])
+                    user_client = temp
+                    me = await user_client.get_me()
+                    session_name = f"{me.first_name}_{state['phone'][-5:]}.session"
+                    session_path = os.path.join(SESSIONS_DIR, session_name)
+                    temp_path = os.path.join(SESSIONS_DIR, f'temp_{user_id}.session')
+                    if os.path.exists(session_path):
+                        await user_client.disconnect()
+                        os.remove(temp_path)
+                        await switch_to_session(session_name)
+                        await event.reply(f"✅ Вход выполнен: {me.first_name}", buttons=admin_menu_buttons)
+                    else:
+                        await user_client.disconnect()
+                        await asyncio.sleep(0.5)
+                        os.rename(temp_path, session_path)
+                        await switch_to_session(session_name)
+                        await event.reply(f"✅ Авторизован: {me.first_name}", buttons=admin_menu_buttons)
+                    del auth_states[user_id]
+                except Exception as e:
+                    await event.reply(f"❌ Ошибка: {e}", buttons=admin_menu_buttons)
+                    del auth_states[user_id]
+            
+            # Конвертация ссылок в ID
+            elif state['step'] == 'awaiting_chat_links' and text != "❌ Отмена":
+                links = [l.strip() for l in text.split('\n') if l.strip()]
+                if not links:
+                    await event.reply("❌ Пустой список", buttons=[[Button.text("❌ Отмена")]])
+                    return
+                await event.reply(f"🔄 Обрабатываю {len(links)} ссылок...")
+                results, dups = await convert_links_to_ids(links)
+                ok = [r for r in results if r['success']]
+                bad = [r for r in results if not r['success']]
+                if ok:
+                    ids = [r['id'] for r in ok]
+                    save_chat_ids_to_file(ids)
+                    msg = f"✅ Сохранено {len(ok)} чатов"
+                    if dups:
+                        msg += f"\n⚠️ Дубликатов: {len(dups)}"
+                    if bad:
+                        msg += f"\n❌ Ошибок: {len(bad)}"
+                    await event.reply(msg, buttons=admin_menu_buttons)
+                else:
+                    await event.reply("❌ Не удалось обработать ссылки", buttons=admin_menu_buttons)
+                del auth_states[user_id]
+            
+            # Смена текста
+            elif state['step'] == 'awaiting_new_text' and text != "❌ Отмена":
+                MESSAGE_TEXT = text
+                await event.reply(f"✅ Текст изменён!", buttons=admin_menu_buttons)
+                del auth_states[user_id]
     
-    print("🔵 5. Обработчики зарегистрированы")
+    print("🔵 6. Все обработчики зарегистрированы")
     print("🟢 Бот запущен и готов к работе!")
+    print(f"👥 Администраторы: {list(load_admins().keys())}")
+    
+    await bot_client.run_until_disconnected()
     
     # Бесконечное ожидание
-    await bot_client.run_until_disconnected()
+    while True:
+        await asyncio.sleep(60)
+        print("💓 Бот жив")
 
 
 if __name__ == "__main__":
@@ -343,8 +868,5 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("\n👋 Бот остановлен вручную")
-    except Exception as e:
-        print(f"❌ Критическая ошибка: {e}")
-        import traceback
-        traceback.print_exc()
+        print("\n👋 Бот остановлен")
+    except Exception as
