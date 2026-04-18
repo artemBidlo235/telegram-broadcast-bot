@@ -12,7 +12,7 @@ from telethon.tl.custom import Button
 # Теперь данные берутся из переменных окружения Railway
 API_ID = int(os.getenv("API_ID", 36594021))
 API_HASH = os.getenv("API_HASH", "6dfedd148bf6bba5d4e67ed213178ebb")
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8297380746:AAHChWZNlbT-_pc70Nr3zUydC6BebI-ao9Q")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8625827991:AAEgzJgHGV9ybK0dFOp9kXrkWEjnPlCMGp0")
 ADMIN_ID = int(os.getenv("ADMIN_ID", 1031953955))
 
 # Настройки рассылки
