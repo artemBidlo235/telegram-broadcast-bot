@@ -6,7 +6,6 @@ import asyncio
 import os
 import glob
 import signal
-import sys
 import uuid
 import json
 from datetime import datetime
@@ -15,14 +14,13 @@ from telethon import TelegramClient, events
 from telethon.errors import FloodWaitError
 from telethon.tl.custom import Button
 
-# Flask импортируем с защитой от ошибок
 try:
     from flask import Flask, jsonify
     FLASK_AVAILABLE = True
     print("✅ Flask загружен")
 except ImportError:
     FLASK_AVAILABLE = False
-    print("⚠️ Flask не установлен, веб-сервер не будет работать")
+    print("⚠️ Flask не установлен")
 
 print("!!! ВСЕ ИМПОРТЫ ЗАГРУЖЕНЫ !!!")
 
@@ -30,12 +28,6 @@ print("!!! ВСЕ ИМПОРТЫ ЗАГРУЖЕНЫ !!!")
 API_ID = int(os.getenv("API_ID", 36594021))
 API_HASH = os.getenv("API_HASH", "6dfedd148bf6bba5d4e67ed213178ebb")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8297380746:AAHChWZNlbT-_pc70Nr3zUydC6BebI-ao9Q")
-
-# СПИСОК АДМИНОВ (добавьте ID друга сюда)
-ADMINS = [
-    1031953955,  # Ваш ID
-    # 123456789,  # ID друга
-]
 
 # Настройки рассылки
 MESSAGE_TEXT = "qwerty"
@@ -45,11 +37,11 @@ DELAY_BETWEEN_MESSAGES = 5
 SESSIONS_DIR = "sessions"
 DATA_DIR = "data"
 USERS_FILE = os.path.join(DATA_DIR, "users.json")
+ADMINS_FILE = os.path.join(DATA_DIR, "admins.json")
 STATS_FILE = os.path.join(DATA_DIR, "stats.json")
 ACTIVE_SESSION_FILE = os.path.join(SESSIONS_DIR, "active_session.txt")
 # ==================================
 
-# Создаём необходимые папки
 os.makedirs(SESSIONS_DIR, exist_ok=True)
 os.makedirs(DATA_DIR, exist_ok=True)
 print(f"📁 Папки созданы: {SESSIONS_DIR}, {DATA_DIR}")
@@ -61,62 +53,93 @@ target_chat_ids = []
 auth_states = {}
 bot_client = None
 
-
-# ========== ВЕБ-СЕРВЕР (если Flask доступен) ==========
-if FLASK_AVAILABLE:
-    app = Flask(__name__)
-    
-    @app.route('/')
-    def index():
-        users = load_users()
-        stats = get_stats()
-        return f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Telegram Бот Рассыльщик</title>
-            <style>
-                body {{ font-family: Arial, sans-serif; margin: 40px; text-align: center; }}
-                .status {{ color: green; font-size: 24px; }}
-                .stats {{ font-size: 18px; margin: 20px; }}
-                table {{ margin: 0 auto; border-collapse: collapse; }}
-                th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
-                th {{ background-color: #f2f2f2; }}
-            </style>
-        </head>
-        <body>
-            <h1>🤖 Telegram Бот Рассыльщик</h1>
-            <div class="status">✅ Бот работает!</div>
-            <div class="stats">
-                <p>📊 Статистика:</p>
-                <p>👥 Всего пользователей: {len(users)}</p>
-                <p>📨 Отправлено сообщений: {stats.get('messages_sent', 0)}</p>
-                <p>📢 Количество рассылок: {stats.get('broadcasts', 0)}</p>
-            </div>
-        </body>
-        </html>
-        """
-    
-    @app.route('/api/users')
-    def api_users():
-        users = load_users()
-        return jsonify(users)
-    
-    @app.route('/api/stats')
-    def api_stats():
-        stats = get_stats()
-        stats['total_users'] = len(load_users())
-        return jsonify(stats)
-    
-    def run_web_server():
-        port = int(os.environ.get("PORT", 8080))
-        app.run(host='0.0.0.0', port=port)
-else:
-    def run_web_server():
-        print("⚠️ Веб-сервер не запущен (Flask не установлен)")
+# ========== РАБОТА С АДМИНАМИ ==========
+def load_admins():
+    """Загружает список админов из файла"""
+    try:
+        with open(ADMINS_FILE, 'r', encoding='utf-8') as f:
+            admins = json.load(f)
+            # Конвертируем ключи в int
+            return {int(k): v for k, v in admins.items()}
+    except FileNotFoundError:
+        # Если файла нет, создаём с владельцем
+        default_admins = {1031953955: {"role": "owner", "added_by": "system", "added_at": datetime.now().isoformat()}}
+        save_admins(default_admins)
+        return default_admins
+    except Exception as e:
+        print(f"❌ Ошибка загрузки админов: {e}")
+        return {1031953955: {"role": "owner", "added_by": "system", "added_at": datetime.now().isoformat()}}
 
 
-# ========== РАБОТА С БАЗОЙ ПОЛЬЗОВАТЕЛЕЙ ==========
+def save_admins(admins):
+    """Сохраняет список админов в файл"""
+    try:
+        with open(ADMINS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(admins, f, indent=2, ensure_ascii=False)
+        return True
+    except Exception as e:
+        print(f"❌ Ошибка сохранения админов: {e}")
+        return False
+
+
+def is_admin(user_id):
+    """Проверяет, является ли пользователь админом"""
+    admins = load_admins()
+    return user_id in admins
+
+
+def is_owner(user_id):
+    """Проверяет, является ли пользователь владельцем"""
+    admins = load_admins()
+    return user_id in admins and admins[user_id].get("role") == "owner"
+
+
+def add_admin(admin_id, added_by, username=None):
+    """Добавляет нового админа"""
+    admins = load_admins()
+    if admin_id in admins:
+        return False, "Пользователь уже является админом"
+    
+    admins[admin_id] = {
+        "role": "admin",
+        "added_by": added_by,
+        "added_at": datetime.now().isoformat(),
+        "username": username
+    }
+    save_admins(admins)
+    return True, "Админ добавлен"
+
+
+def remove_admin(admin_id):
+    """Удаляет админа"""
+    admins = load_admins()
+    if admin_id not in admins:
+        return False, "Пользователь не является админом"
+    
+    if admins[admin_id].get("role") == "owner":
+        return False, "Нельзя удалить владельца"
+    
+    del admins[admin_id]
+    save_admins(admins)
+    return True, "Админ удалён"
+
+
+def get_admins_list():
+    """Возвращает список всех админов с информацией"""
+    admins = load_admins()
+    result = []
+    for uid, data in admins.items():
+        result.append({
+            "id": uid,
+            "role": data.get("role", "admin"),
+            "added_by": data.get("added_by"),
+            "added_at": data.get("added_at"),
+            "username": data.get("username")
+        })
+    return result
+
+
+# ========== РАБОТА С ПОЛЬЗОВАТЕЛЯМИ ==========
 def load_users():
     try:
         with open(USERS_FILE, 'r', encoding='utf-8') as f:
@@ -158,14 +181,6 @@ def add_user(user_id, first_name, username=None):
         return False
 
 
-def is_admin(user_id):
-    return user_id in ADMINS
-
-
-def get_users_list():
-    return load_users()
-
-
 def get_stats():
     try:
         with open(STATS_FILE, 'r', encoding='utf-8') as f:
@@ -186,6 +201,66 @@ def update_stats(messages_count=0):
             json.dump(stats, f, indent=2)
     except:
         pass
+
+
+# ========== ВЕБ-СЕРВЕР ==========
+if FLASK_AVAILABLE:
+    app = Flask(__name__)
+    
+    @app.route('/')
+    def index():
+        users = load_users()
+        admins = load_admins()
+        stats = get_stats()
+        return f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Telegram Бот Рассыльщик</title>
+            <style>
+                body {{ font-family: Arial, sans-serif; margin: 40px; text-align: center; }}
+                .status {{ color: green; font-size: 24px; }}
+                .stats {{ font-size: 18px; margin: 20px; }}
+                table {{ margin: 0 auto; border-collapse: collapse; }}
+                th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+                th {{ background-color: #f2f2f2; }}
+            </style>
+        </head>
+        <body>
+            <h1>🤖 Telegram Бот Рассыльщик</h1>
+            <div class="status">✅ Бот работает!</div>
+            <div class="stats">
+                <p>📊 Статистика:</p>
+                <p>👥 Всего пользователей: {len(users)}</p>
+                <p>👑 Администраторов: {len(admins)}</p>
+                <p>📨 Отправлено сообщений: {stats.get('messages_sent', 0)}</p>
+                <p>📢 Количество рассылок: {stats.get('broadcasts', 0)}</p>
+            </div>
+        </body>
+        </html>
+        """
+    
+    @app.route('/api/users')
+    def api_users():
+        return jsonify(load_users())
+    
+    @app.route('/api/admins')
+    def api_admins():
+        return jsonify(load_admins())
+    
+    @app.route('/api/stats')
+    def api_stats():
+        stats = get_stats()
+        stats['total_users'] = len(load_users())
+        stats['total_admins'] = len(load_admins())
+        return jsonify(stats)
+    
+    def run_web_server():
+        port = int(os.environ.get("PORT", 8080))
+        app.run(host='0.0.0.0', port=port)
+else:
+    def run_web_server():
+        print("⚠️ Веб-сервер не запущен")
 
 
 # ========== ОСНОВНАЯ ЛОГИКА БОТА ==========
@@ -478,7 +553,8 @@ async def main():
         [Button.text("📝 Сменить текст"), Button.text("⏹️ Остановить")],
         [Button.text("📊 Статус"), Button.text("🔑 Логин")],
         [Button.text("📁 Управление сессиями"), Button.text("👥 Пользователи")],
-        [Button.text("📈 Статистика")]
+        [Button.text("👑 Управление админами"), Button.text("📈 Статистика")],
+        [Button.text("◀️ Назад")]
     ]
     
     print("🔵 3. Меню создано")
@@ -502,19 +578,29 @@ async def main():
         
         add_user(user_id, first_name, username)
         
-        welcome_text = f"""
+        if is_admin(user_id):
+            role = "Администратор" if not is_owner(user_id) else "Владелец"
+            welcome_text = f"""
 🤖 **Добро пожаловать, {first_name}!**
 
-Я бот для управления рассылками.
+👑 **Ваша роль:** {role}
+
+Вам доступны все функции управления ботом.
+Используйте кнопки меню для работы.
+"""
+            await event.reply(welcome_text, buttons=admin_menu_buttons)
+        else:
+            welcome_text = f"""
+🤖 **Добро пожаловать, {first_name}!**
+
+Вы зарегистрированы как обычный пользователь.
 
 📌 **Доступные команды:**
 • /start - Показать это сообщение
 • /help - Помощь
 • /status - Проверить статус
-
-🔐 **Для администраторов доступны дополнительные функции.**
 """
-        await event.reply(welcome_text, buttons=user_menu_buttons)
+            await event.reply(welcome_text, buttons=user_menu_buttons)
     
     # ========== ОБРАБОТЧИК КОМАНДЫ /HELP ==========
     @bot_client.on(events.NewMessage(pattern='/help'))
@@ -522,7 +608,7 @@ async def main():
         user_id = event.sender_id
         if is_admin(user_id):
             help_text = """
-📚 **Помощь по боту**
+📚 **Помощь по боту (Админ-панель)**
 
 **Основные функции:**
 • 📋 Запустить рассылку (по чатам) - рассылка в указанные чаты
@@ -533,9 +619,10 @@ async def main():
 
 **Управление:**
 • 📊 Статус - проверить статус аккаунта
-• 🔑 Логин - авторизовать аккаунт
-• 📁 Управление сессиями - управление сессиями пользователей
+• 🔑 Логин - авторизовать аккаунт пользователя
+• 📁 Управление сессиями - управление сессиями
 • 👥 Пользователи - список пользователей бота
+• 👑 Управление админами - добавлять/удалять админов
 • 📈 Статистика - статистика рассылок
 """
         else:
@@ -545,7 +632,7 @@ async def main():
 • 📊 Статус - проверить статус бота
 • ℹ️ О боте - информация о боте
 
-Для получения доступа к дополнительным функциям обратитесь к администратору.
+Для получения прав администратора обратитесь к владельцу бота.
 """
         await event.reply(help_text)
     
@@ -560,10 +647,8 @@ async def main():
         if not text.startswith('/'):
             add_user(user_id, event.sender.first_name, event.sender.username)
         
-        is_user_admin = is_admin(user_id)
-        
-        # Обычный пользователь
-        if not is_user_admin:
+        # Обычный пользователь (не админ)
+        if not is_admin(user_id):
             if text == "📊 Статус" or text == "/status":
                 stats = get_stats()
                 users_count = len(load_users())
@@ -580,13 +665,53 @@ async def main():
                 await event.reply("""
 🤖 **О боте**
 
-Версия: 2.0
+Версия: 2.0 (с системой ролей)
 Бот предназначен для управления рассылками в Telegram.
+
+👑 Владелец: Егор
 """)
             return
         
-        # Админ-функции
-        if text == "📋 Запустить рассылку (по чатам)":
+        # ========== АДМИН-ФУНКЦИИ ==========
+        
+        # Управление админами
+        if text == "👑 Управление админами":
+            if not is_owner(user_id):
+                await event.reply("❌ Только владелец может управлять администраторами!", buttons=admin_menu_buttons)
+                return
+            
+            admins = get_admins_list()
+            if not admins:
+                await event.reply("📭 Нет администраторов", buttons=admin_menu_buttons)
+                return
+            
+            admin_list = "👑 **Список администраторов:**\n\n"
+            for a in admins:
+                admin_list += f"🆔 ID: `{a['id']}`\n👤 Роль: {a['role']}\n📅 Добавлен: {a['added_at'][:10]}\n\n"
+            
+            buttons = [
+                [Button.text("➕ Добавить админа")],
+                [Button.text("➖ Удалить админа")],
+                [Button.text("◀️ Назад")]
+            ]
+            await event.reply(admin_list, buttons=buttons)
+        
+        elif text == "➕ Добавить админа":
+            if not is_owner(user_id):
+                await event.reply("❌ Только владелец может добавлять администраторов!")
+                return
+            auth_states[user_id] = {'step': 'adding_admin'}
+            await event.reply("👑 Введите ID пользователя, которого хотите сделать администратором:\n\nПример: 123456789", buttons=[[Button.text("❌ Отмена")]])
+        
+        elif text == "➖ Удалить админа":
+            if not is_owner(user_id):
+                await event.reply("❌ Только владелец может удалять администраторов!")
+                return
+            auth_states[user_id] = {'step': 'removing_admin'}
+            await event.reply("👑 Введите ID администратора, которого хотите удалить:\n\nПример: 123456789", buttons=[[Button.text("❌ Отмена")]])
+        
+        # Остальные админ-функции
+        elif text == "📋 Запустить рассылку (по чатам)":
             if not user_client or not user_client.is_connected():
                 await event.reply("❌ Авторизуйтесь: 🔑 Логин", buttons=admin_menu_buttons)
                 return
@@ -669,10 +794,12 @@ async def main():
         elif text == "📈 Статистика":
             stats = get_stats()
             users_count = len(load_users())
+            admins_count = len(load_admins())
             await event.reply(f"""
 📊 **Статистика бота**
 
 👥 Всего пользователей: {users_count}
+👑 Администраторов: {admins_count}
 📨 Отправлено сообщений: {stats.get('messages_sent', 0)}
 📢 Проведено рассылок: {stats.get('broadcasts', 0)}
 
@@ -698,125 +825,55 @@ async def main():
                 del auth_states[user_id]
             await event.reply("❌ Отменено", buttons=admin_menu_buttons)
         
+        # Обработка состояний
         elif user_id in auth_states:
             state = auth_states[user_id]
             
-            if state['step'] == 'broadcast_to_users' and text != "❌ Отмена":
-                users = load_users()
-                success_count = 0
-                fail_count = 0
-                status_msg = await event.reply(f"🚀 Начинаю рассылку {len(users)} пользователям...")
-                for user_id_str, user_data in users.items():
+            # Добавление админа
+            if state['step'] == 'adding_admin' and text != "❌ Отмена":
+                try:
+                    new_admin_id = int(text.strip())
+                    # Получаем информацию о пользователе
                     try:
-                        target_id = int(user_id_str)
-                        await bot_client.send_message(target_id, text)
-                        success_count += 1
+                        entity = await bot_client.get_entity(new_admin_id)
+                        username = getattr(entity, 'username', None)
+                        first_name = getattr(entity, 'first_name', 'Unknown')
                     except:
-                        fail_count += 1
-                    await asyncio.sleep(0.3)
-                await status_msg.edit(f"✅ Рассылка завершена!\n✅ Успешно: {success_count}\n❌ Ошибок: {fail_count}")
-                update_stats(success_count)
-                del auth_states[user_id]
-            
-            elif state['step'] == 'awaiting_phone' and text.startswith('+'):
-                phone = text
-                state['phone'] = phone
-                state['step'] = 'awaiting_code'
-                temp_path = os.path.join(SESSIONS_DIR, f'temp_{user_id}')
-                temp = TelegramClient(temp_path, API_ID, API_HASH)
-                await temp.connect()
-                state['temp'] = temp
-                try:
-                    result = await temp.send_code_request(phone)
-                    state['hash'] = result.phone_code_hash
-                    await event.reply("🔑 Введите код из Telegram", buttons=[[Button.text("❌ Отмена")]])
-                except Exception as e:
-                    await event.reply(f"❌ {e}", buttons=admin_menu_buttons)
-                    del auth_states[user_id]
-            
-            elif state['step'] == 'awaiting_code' and text.isdigit() and len(text) == 5:
-                code = text
-                temp = state['temp']
-                try:
-                    await temp.sign_in(phone=state['phone'], code=code, phone_code_hash=state['hash'])
-                    user_client = temp
-                    me = await user_client.get_me()
-                    session_name = f"{me.first_name}_{state['phone'][-5:]}.session"
-                    session_path = os.path.join(SESSIONS_DIR, session_name)
-                    temp_path = os.path.join(SESSIONS_DIR, f'temp_{user_id}.session')
-                    if os.path.exists(session_path):
-                        await user_client.disconnect()
-                        os.remove(temp_path)
-                        await switch_to_session(session_name)
-                        await event.reply(f"✅ Вход выполнен: {me.first_name}", buttons=admin_menu_buttons)
+                        username = None
+                        first_name = "Unknown"
+                    
+                    success, msg = add_admin(new_admin_id, user_id, username)
+                    if success:
+                        await event.reply(f"✅ {msg}!\n👤 {first_name} (ID: {new_admin_id}) теперь может управлять ботом.", buttons=admin_menu_buttons)
+                        # Уведомляем нового админа
+                        try:
+                            await bot_client.send_message(new_admin_id, f"🎉 Вам выданы права администратора в боте!\n\nВладелец: {event.sender.first_name}")
+                        except:
+                            pass
                     else:
-                        await user_client.disconnect()
-                        await asyncio.sleep(0.5)
-                        os.rename(temp_path, session_path)
-                        await switch_to_session(session_name)
-                        await event.reply(f"✅ Авторизован: {me.first_name}", buttons=admin_menu_buttons)
+                        await event.reply(f"❌ {msg}", buttons=admin_menu_buttons)
                     del auth_states[user_id]
-                except Exception as e:
-                    await event.reply(f"❌ Ошибка: {e}", buttons=admin_menu_buttons)
+                except ValueError:
+                    await event.reply("❌ Неверный формат ID. Введите число.", buttons=admin_menu_buttons)
                     del auth_states[user_id]
             
-            elif state['step'] == 'awaiting_chat_links' and text != "❌ Отмена":
-                links = [l.strip() for l in text.split('\n') if l.strip()]
-                if not links:
-                    await event.reply("❌ Пустой список", buttons=[[Button.text("❌ Отмена")]])
-                    return
-                await event.reply(f"🔄 Обрабатываю {len(links)}...")
-                results, dups = await convert_links_to_ids(links)
-                ok = [r for r in results if r['success']]
-                bad = [r for r in results if not r['success']]
-                if ok:
-                    ids = [r['id'] for r in ok]
-                    save_chat_ids_to_file(ids)
-                    msg = f"✅ Сохранено {len(ok)} чатов"
-                    if dups:
-                        msg += f"\n⚠️ Дубликатов: {len(dups)}"
-                    if bad:
-                        msg += f"\n❌ Ошибок: {len(bad)}"
-                    msg += "\n\n🚀 Запустить рассылку?"
+            # Удаление админа
+            elif state['step'] == 'removing_admin' and text != "❌ Отмена":
+                try:
+                    admin_id_to_remove = int(text.strip())
+                    success, msg = remove_admin(admin_id_to_remove)
+                    if success:
+                        await event.reply(f"✅ {msg}", buttons=admin_menu_buttons)
+                        # Уведомляем удалённого админа
+                        try:
+                            await bot_client.send_message(admin_id_to_remove, f"⚠️ Ваши права администратора в боте были отозваны.")
+                        except:
+                            pass
+                    else:
+                        await event.reply(f"❌ {msg}", buttons=admin_menu_buttons)
                     del auth_states[user_id]
-                    await event.reply(msg, buttons=[[Button.text("✅ Да"), Button.text("❌ Нет")]])
-                else:
-                    await event.reply("❌ Не удалось обработать ссылки", buttons=admin_menu_buttons)
+                except ValueError:
+                    await event.reply("❌ Неверный формат ID. Введите число.", buttons=admin_menu_buttons)
                     del auth_states[user_id]
             
-            elif state['step'] == 'awaiting_new_text' and text != "❌ Отмена":
-                MESSAGE_TEXT = text
-                await event.reply(f"✅ Текст изменён", buttons=admin_menu_buttons)
-                del auth_states[user_id]
-        
-        elif text == "✅ Да":
-            chat_ids = load_chat_ids_from_file()
-            if chat_ids:
-                await send_broadcast_to_chats(chat_ids, event)
-            else:
-                await event.reply("❌ Нет чатов", buttons=admin_menu_buttons)
-        
-        elif text == "❌ Нет":
-            await event.reply("✅ База сохранена", buttons=admin_menu_buttons)
-    
-    print("🔵 6. Обработчик зарегистрирован")
-    print(f"📁 Папка для сессий: {SESSIONS_DIR}")
-    print(f"👥 Администраторы: {ADMINS}")
-    print("💡 Нажмите Ctrl+C для безопасного завершения")
-    print("🟢 Бот запущен и ожидает сообщения...")
-    
-    await bot_client.run_until_disconnected()
-    
-    while True:
-        await asyncio.sleep(60)
-        print("💓 Бот всё ещё жив...")
-
-
-if __name__ == "__main__":
-    print("!!! ЗАПУСКАЮ MAIN !!!")
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("\n👋 Бот остановлен вручную")
-    except Exception as e:
-        print(f"❌ Критическая ошибка: {e}")
+            # Рассылка
