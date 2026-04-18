@@ -12,7 +12,7 @@ from telethon.tl.custom import Button
 # Теперь данные берутся из переменных окружения Railway
 API_ID = int(os.getenv("API_ID", 36594021))
 API_HASH = os.getenv("API_HASH", "6dfedd148bf6bba5d4e67ed213178ebb")
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8779543002:AAEnnD2AeimtSQDptnmVh-OMXR64sLe5xDg")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8297380746:AAHChWZNlbT-_pc70Nr3zUydC6BebI-ao9Q")
 ADMIN_ID = int(os.getenv("ADMIN_ID", 1031953955))
 
 # Настройки рассылки
@@ -287,11 +287,13 @@ async def main():
             break
         except FloodWaitError as e:
             wait_time = e.seconds
-            print(f"⚠️ Флуд-ожидание {wait_time} сек. Попытка {attempt + 1}/{max_retries}")
+            print(f"⚠️ Флуд-ожидание {wait_time} сек. (примерно {wait_time // 60} мин)")
+            print(f"Попытка {attempt + 1}/{max_retries}")
             if attempt < max_retries - 1:
-                await asyncio.sleep(min(wait_time, 60))
+                print(f"⏳ Жду {wait_time} секунд перед следующей попыткой...")
+                await asyncio.sleep(wait_time)
             else:
-                print("❌ Не удалось запустить бота из-за флуда")
+                print("❌ Все попытки исчерпаны. Бот не может запуститься из-за флуда.")
                 return
         except Exception as e:
             print(f"❌ Ошибка запуска бота: {e}")
