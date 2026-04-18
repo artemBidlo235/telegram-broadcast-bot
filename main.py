@@ -1,4 +1,3 @@
-Есть ли тут ошибки? 
 print("!!! СКРИПТ НАЧАЛ РАБОТУ !!!")
 import sys
 print(f"Python version: {sys.version}")
