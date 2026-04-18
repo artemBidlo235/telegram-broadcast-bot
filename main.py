@@ -691,7 +691,7 @@ async def main():
             for uid, data in users.items():
                 user_list += f"🆔 ID: `{uid}`\n👤 {data.get('first_name', '?')}\n📅 {data.get('joined_at', '?')[:10]}\n\n"
                 if len(user_list) > 3500:
-                    user_list += f"\n... и ещё {len(users) - len(user_list.split('\\n\\n'))} пользователей"
+                    user_list += f"\n... и ещё {len(users)} пользователей"
                     break
             await event.reply(user_list, buttons=admin_menu_buttons)
         
@@ -869,4 +869,7 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("\n👋 Бот остановлен")
-    except Exception as
+    except Exception as e:
+        print(f"❌ Критическая ошибка: {e}")
+        import traceback
+        traceback.print_exc()
