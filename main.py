@@ -1,3 +1,7 @@
+print("!!! СКРИПТ НАЧАЛ РАБОТУ !!!")
+import sys
+print(f"Python version: {sys.version}")
+
 import asyncio
 import os
 import glob
@@ -6,22 +10,31 @@ import sys
 import uuid
 import json
 from datetime import datetime
-from flask import Flask, request, jsonify
 from threading import Thread
 from telethon import TelegramClient, events
 from telethon.errors import FloodWaitError
 from telethon.tl.custom import Button
 
+# Flask импортируем с защитой от ошибок
+try:
+    from flask import Flask, jsonify
+    FLASK_AVAILABLE = True
+    print("✅ Flask загружен")
+except ImportError:
+    FLASK_AVAILABLE = False
+    print("⚠️ Flask не установлен, веб-сервер не будет работать")
+
+print("!!! ВСЕ ИМПОРТЫ ЗАГРУЖЕНЫ !!!")
+
 # ========== ВАШИ ДАННЫЕ ==========
-# Данные берутся из переменных окружения Railway
 API_ID = int(os.getenv("API_ID", 36594021))
 API_HASH = os.getenv("API_HASH", "6dfedd148bf6bba5d4e67ed213178ebb")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8297380746:AAHChWZNlbT-_pc70Nr3zUydC6BebI-ao9Q")
 
-# СПИСОК АДМИНОВ (можно добавить ID друга)
+# СПИСОК АДМИНОВ (добавьте ID друга сюда)
 ADMINS = [
     1031953955,  # Ваш ID
-    # 123456789,  # ID друга (добавьте сюда)
+    # 123456789,  # ID друга
 ]
 
 # Настройки рассылки
@@ -39,17 +52,72 @@ ACTIVE_SESSION_FILE = os.path.join(SESSIONS_DIR, "active_session.txt")
 # Создаём необходимые папки
 os.makedirs(SESSIONS_DIR, exist_ok=True)
 os.makedirs(DATA_DIR, exist_ok=True)
+print(f"📁 Папки созданы: {SESSIONS_DIR}, {DATA_DIR}")
 
 # Глобальные переменные
 user_client = None
 is_broadcasting = False
 target_chat_ids = []
 auth_states = {}
+bot_client = None
+
+
+# ========== ВЕБ-СЕРВЕР (если Flask доступен) ==========
+if FLASK_AVAILABLE:
+    app = Flask(__name__)
+    
+    @app.route('/')
+    def index():
+        users = load_users()
+        stats = get_stats()
+        return f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Telegram Бот Рассыльщик</title>
+            <style>
+                body {{ font-family: Arial, sans-serif; margin: 40px; text-align: center; }}
+                .status {{ color: green; font-size: 24px; }}
+                .stats {{ font-size: 18px; margin: 20px; }}
+                table {{ margin: 0 auto; border-collapse: collapse; }}
+                th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+                th {{ background-color: #f2f2f2; }}
+            </style>
+        </head>
+        <body>
+            <h1>🤖 Telegram Бот Рассыльщик</h1>
+            <div class="status">✅ Бот работает!</div>
+            <div class="stats">
+                <p>📊 Статистика:</p>
+                <p>👥 Всего пользователей: {len(users)}</p>
+                <p>📨 Отправлено сообщений: {stats.get('messages_sent', 0)}</p>
+                <p>📢 Количество рассылок: {stats.get('broadcasts', 0)}</p>
+            </div>
+        </body>
+        </html>
+        """
+    
+    @app.route('/api/users')
+    def api_users():
+        users = load_users()
+        return jsonify(users)
+    
+    @app.route('/api/stats')
+    def api_stats():
+        stats = get_stats()
+        stats['total_users'] = len(load_users())
+        return jsonify(stats)
+    
+    def run_web_server():
+        port = int(os.environ.get("PORT", 8080))
+        app.run(host='0.0.0.0', port=port)
+else:
+    def run_web_server():
+        print("⚠️ Веб-сервер не запущен (Flask не установлен)")
 
 
 # ========== РАБОТА С БАЗОЙ ПОЛЬЗОВАТЕЛЕЙ ==========
 def load_users():
-    """Загружает список пользователей из файла"""
     try:
         with open(USERS_FILE, 'r', encoding='utf-8') as f:
             return json.load(f)
@@ -61,7 +129,6 @@ def load_users():
 
 
 def save_users(users):
-    """Сохраняет список пользователей в файл"""
     try:
         with open(USERS_FILE, 'w', encoding='utf-8') as f:
             json.dump(users, f, indent=2, ensure_ascii=False)
@@ -72,7 +139,6 @@ def save_users(users):
 
 
 def add_user(user_id, first_name, username=None):
-    """Добавляет нового пользователя в базу"""
     users = load_users()
     user_id_str = str(user_id)
     
@@ -87,25 +153,20 @@ def add_user(user_id, first_name, username=None):
         print(f"✅ Новый пользователь: {first_name} (ID: {user_id})")
         return True
     else:
-        # Обновляем время последней активности
         users[user_id_str]["last_active"] = datetime.now().isoformat()
         save_users(users)
         return False
 
 
 def is_admin(user_id):
-    """Проверяет, является ли пользователь администратором"""
     return user_id in ADMINS
 
 
 def get_users_list():
-    """Возвращает список всех пользователей"""
-    users = load_users()
-    return users
+    return load_users()
 
 
 def get_stats():
-    """Возвращает статистику бота"""
     try:
         with open(STATS_FILE, 'r', encoding='utf-8') as f:
             return json.load(f)
@@ -116,7 +177,6 @@ def get_stats():
 
 
 def update_stats(messages_count=0):
-    """Обновляет статистику"""
     stats = get_stats()
     stats["messages_sent"] += messages_count
     if messages_count > 0:
@@ -126,69 +186,6 @@ def update_stats(messages_count=0):
             json.dump(stats, f, indent=2)
     except:
         pass
-
-
-# ========== ВЕБ-СЕРВЕР ДЛЯ RAILWAY ==========
-app = Flask(__name__)
-
-
-@app.route('/')
-def index():
-    """Главная страница веб-сервера"""
-    users = load_users()
-    stats = get_stats()
-    return f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Telegram Бот Рассыльщик</title>
-        <style>
-            body {{ font-family: Arial, sans-serif; margin: 40px; text-align: center; }}
-            .status {{ color: green; font-size: 24px; }}
-            .stats {{ font-size: 18px; margin: 20px; }}
-            table {{ margin: 0 auto; border-collapse: collapse; }}
-            th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
-            th {{ background-color: #f2f2f2; }}
-        </style>
-    </head>
-    <body>
-        <h1>🤖 Telegram Бот Рассыльщик</h1>
-        <div class="status">✅ Бот работает!</div>
-        <div class="stats">
-            <p>📊 Статистика:</p>
-            <p>👥 Всего пользователей: {len(users)}</p>
-            <p>📨 Отправлено сообщений: {stats.get('messages_sent', 0)}</p>
-            <p>📢 Количество рассылок: {stats.get('broadcasts', 0)}</p>
-        </div>
-        <h3>👥 Список пользователей:</h3>
-        <table>
-            <tr><th>ID</th><th>Имя</th><th>Username</th><th>Дата присоединения</th></tr>
-            {''.join([f"<tr><td>{uid}</td><td>{data.get('first_name', '')}</td><td>{data.get('username', '-')}</td><td>{data.get('joined_at', '')[:10]}</td></tr>" for uid, data in users.items()])}
-        </table>
-    </body>
-    </html>
-    """
-
-
-@app.route('/api/users')
-def api_users():
-    """API для получения списка пользователей"""
-    users = load_users()
-    return jsonify(users)
-
-
-@app.route('/api/stats')
-def api_stats():
-    """API для получения статистики"""
-    stats = get_stats()
-    stats['total_users'] = len(load_users())
-    return jsonify(stats)
-
-
-def run_web_server():
-    """Запускает веб-сервер в отдельном потоке"""
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host='0.0.0.0', port=port)
 
 
 # ========== ОСНОВНАЯ ЛОГИКА БОТА ==========
@@ -380,27 +377,6 @@ async def convert_links_to_ids(links):
     return results, duplicates
 
 
-async def send_broadcast_to_users(message_text, event):
-    """Отправляет сообщение всем пользователям бота"""
-    users = load_users()
-    success_count = 0
-    fail_count = 0
-    
-    status_msg = await event.reply(f"🚀 Рассылка {len(users)} пользователям...")
-    
-    for user_id_str, user_data in users.items():
-        try:
-            user_id = int(user_id_str)
-            await bot_client.send_message(user_id, message_text)
-            success_count += 1
-        except:
-            fail_count += 1
-        await asyncio.sleep(0.5)  # Небольшая задержка между сообщениями
-    
-    await status_msg.edit(f"✅ Рассылка завершена!\n✅ Успешно: {success_count}\n❌ Ошибок: {fail_count}")
-    update_stats(success_count)
-
-
 async def send_broadcast_to_chats(chat_ids, event):
     global is_broadcasting, user_client, MESSAGE_TEXT
     
@@ -452,17 +428,16 @@ async def main():
     
     print("🔵 1. Начало main()")
     
-    # Запускаем веб-сервер в отдельном потоке
+    # Запускаем веб-сервер
     print("🌐 Запуск веб-сервера...")
     web_thread = Thread(target=run_web_server, daemon=True)
     web_thread.start()
     print("✅ Веб-сервер запущен")
     
-    # Задержка перед стартом для стабильности
     await asyncio.sleep(2)
     print("🔵 1.5 После задержки")
     
-    # Запуск бота с обработкой флуда и уникальным именем сессии
+    # Запуск бота
     max_retries = 3
     bot_client = None
     
@@ -507,10 +482,7 @@ async def main():
     ]
     
     print("🔵 3. Меню создано")
-    
-    # Проверка папки sessions
     print(f"📁 Папка sessions существует: {os.path.exists(SESSIONS_DIR)}")
-    print(f"📁 Полный путь: {os.path.abspath(SESSIONS_DIR)}")
     
     last_session = load_active_session()
     if last_session:
@@ -528,10 +500,8 @@ async def main():
         first_name = event.sender.first_name
         username = event.sender.username
         
-        # Добавляем пользователя в базу
         add_user(user_id, first_name, username)
         
-        # Приветственное сообщение
         welcome_text = f"""
 🤖 **Добро пожаловать, {first_name}!**
 
@@ -579,7 +549,7 @@ async def main():
 """
         await event.reply(help_text)
     
-    # ========== ОСНОВНОЙ ОБРАБОТЧИК СООБЩЕНИЙ ==========
+    # ========== ОСНОВНОЙ ОБРАБОТЧИК ==========
     @bot_client.on(events.NewMessage)
     async def unified_handler(event):
         global target_chat_ids, is_broadcasting, MESSAGE_TEXT, user_client
@@ -587,14 +557,12 @@ async def main():
         user_id = event.sender_id
         text = event.raw_text
         
-        # Добавляем пользователя в базу (если ещё не добавлен)
-        if not text.startswith('/'):  # Не добавляем по командам, только по обычным сообщениям
+        if not text.startswith('/'):
             add_user(user_id, event.sender.first_name, event.sender.username)
         
-        # Проверяем, админ ли пользователь
         is_user_admin = is_admin(user_id)
         
-        # Меню для обычных пользователей
+        # Обычный пользователь
         if not is_user_admin:
             if text == "📊 Статус" or text == "/status":
                 stats = get_stats()
@@ -613,15 +581,11 @@ async def main():
 🤖 **О боте**
 
 Версия: 2.0
-Разработчик: @YourUsername
-
 Бот предназначен для управления рассылками в Telegram.
 """)
-            return  # Обычный пользователь не может использовать админ-функции
+            return
         
-        # ========== АДМИН-ФУНКЦИИ ==========
-        
-        # Основное меню
+        # Админ-функции
         if text == "📋 Запустить рассылку (по чатам)":
             if not user_client or not user_client.is_connected():
                 await event.reply("❌ Авторизуйтесь: 🔑 Логин", buttons=admin_menu_buttons)
@@ -694,15 +658,11 @@ async def main():
             if not users:
                 await event.reply("📭 Нет зарегистрированных пользователей")
                 return
-            
-            # Формируем список пользователей
             user_list = "👥 **Список пользователей:**\n\n"
             for uid, data in users.items():
                 user_list += f"🆔 ID: `{uid}`\n👤 Имя: {data.get('first_name', '?')}\n📅 Присоединился: {data.get('joined_at', '?')[:10]}\n\n"
-            
-            # Отправляем частями, если слишком длинное
             if len(user_list) > 4000:
-                await event.reply(f"📊 Всего пользователей: {len(users)}\n\nПодробный список доступен по адресу:\n{os.environ.get('RAILWAY_PUBLIC_DOMAIN', 'http://localhost:8080')}/")
+                await event.reply(f"📊 Всего пользователей: {len(users)}")
             else:
                 await event.reply(user_list)
         
@@ -741,14 +701,11 @@ async def main():
         elif user_id in auth_states:
             state = auth_states[user_id]
             
-            # Рассылка пользователям
             if state['step'] == 'broadcast_to_users' and text != "❌ Отмена":
                 users = load_users()
                 success_count = 0
                 fail_count = 0
-                
                 status_msg = await event.reply(f"🚀 Начинаю рассылку {len(users)} пользователям...")
-                
                 for user_id_str, user_data in users.items():
                     try:
                         target_id = int(user_id_str)
@@ -757,14 +714,11 @@ async def main():
                     except:
                         fail_count += 1
                     await asyncio.sleep(0.3)
-                
                 await status_msg.edit(f"✅ Рассылка завершена!\n✅ Успешно: {success_count}\n❌ Ошибок: {fail_count}")
                 update_stats(success_count)
                 del auth_states[user_id]
             
-            # Логин по телефону
             elif state['step'] == 'awaiting_phone' and text.startswith('+'):
-                print(f"📱 Получен номер: {text}")
                 phone = text
                 state['phone'] = phone
                 state['step'] = 'awaiting_code'
@@ -781,7 +735,6 @@ async def main():
                     del auth_states[user_id]
             
             elif state['step'] == 'awaiting_code' and text.isdigit() and len(text) == 5:
-                print(f"🔑 Получен код: {text}")
                 code = text
                 temp = state['temp']
                 try:
@@ -807,9 +760,7 @@ async def main():
                     await event.reply(f"❌ Ошибка: {e}", buttons=admin_menu_buttons)
                     del auth_states[user_id]
             
-            # Ссылки для чатов
             elif state['step'] == 'awaiting_chat_links' and text != "❌ Отмена":
-                print(f"📋 Получены ссылки: {len(text.split(chr(10)))} строк")
                 links = [l.strip() for l in text.split('\n') if l.strip()]
                 if not links:
                     await event.reply("❌ Пустой список", buttons=[[Button.text("❌ Отмена")]])
@@ -833,14 +784,11 @@ async def main():
                     await event.reply("❌ Не удалось обработать ссылки", buttons=admin_menu_buttons)
                     del auth_states[user_id]
             
-            # Смена текста
             elif state['step'] == 'awaiting_new_text' and text != "❌ Отмена":
-                print(f"📝 Новый текст: {text[:50]}...")
                 MESSAGE_TEXT = text
                 await event.reply(f"✅ Текст изменён", buttons=admin_menu_buttons)
                 del auth_states[user_id]
         
-        # Обработка Да/Нет после сохранения базы
         elif text == "✅ Да":
             chat_ids = load_chat_ids_from_file()
             if chat_ids:
@@ -853,10 +801,22 @@ async def main():
     
     print("🔵 6. Обработчик зарегистрирован")
     print(f"📁 Папка для сессий: {SESSIONS_DIR}")
-    print(f"📁 Папка для данных: {DATA_DIR}")
     print(f"👥 Администраторы: {ADMINS}")
     print("💡 Нажмите Ctrl+C для безопасного завершения")
-    
-    # ========== БЕСКОНЕЧНОЕ ОЖИДАНИЕ ==========
     print("🟢 Бот запущен и ожидает сообщения...")
-    print(f"🌐 Веб-интерфейс доступен по адресу: https://{os.environ.get('RAILWAY_PUBLIC_DOMAIN', 'localhost:8080')}")
+    
+    await bot_client.run_until_disconnected()
+    
+    while True:
+        await asyncio.sleep(60)
+        print("💓 Бот всё ещё жив...")
+
+
+if __name__ == "__main__":
+    print("!!! ЗАПУСКАЮ MAIN !!!")
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\n👋 Бот остановлен вручную")
+    except Exception as e:
+        print(f"❌ Критическая ошибка: {e}")
