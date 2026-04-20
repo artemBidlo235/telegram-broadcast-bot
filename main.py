@@ -1,19 +1,55 @@
-print("!!! СКРИПТ НАЧАЛ РАБОТУ !!!")
 import sys
+import traceback
+
+print("!!! СКРИПТ НАЧАЛ РАБОТУ !!!")
 print(f"Python version: {sys.version}")
+print(f"Python executable: {sys.executable}")
 
+# Логирование импортов
+print("🔵 Импортирую asyncio...")
 import asyncio
-import os
-import glob
-import signal
-import uuid
-import json
-from datetime import datetime
-from threading import Thread
-from telethon import TelegramClient, events
-from telethon.errors import FloodWaitError
-from telethon.tl.custom import Button
+print("✅ asyncio импортирован")
 
+print("🔵 Импортирую os...")
+import os
+print("✅ os импортирован")
+
+print("🔵 Импортирую glob...")
+import glob
+print("✅ glob импортирован")
+
+print("🔵 Импортирую signal...")
+import signal
+print("✅ signal импортирован")
+
+print("🔵 Импортирую uuid...")
+import uuid
+print("✅ uuid импортирован")
+
+print("🔵 Импортирую json...")
+import json
+print("✅ json импортирован")
+
+print("🔵 Импортирую datetime...")
+from datetime import datetime
+print("✅ datetime импортирован")
+
+print("🔵 Импортирую threading...")
+from threading import Thread
+print("✅ threading импортирован")
+
+print("🔵 Импортирую telethon...")
+try:
+    from telethon import TelegramClient, events
+    from telethon.errors import FloodWaitError
+    from telethon.tl.custom import Button
+    print("✅ telethon импортирован")
+except Exception as e:
+    print(f"❌ Ошибка импорта telethon: {e}")
+    traceback.print_exc()
+    sys.exit(1)
+
+print("🔵 Импортирую flask...")
 try:
     from flask import Flask, jsonify
     FLASK_AVAILABLE = True
@@ -21,16 +57,25 @@ try:
 except ImportError:
     FLASK_AVAILABLE = False
     print("⚠️ Flask не установлен")
+except Exception as e:
+    print(f"❌ Ошибка импорта Flask: {e}")
+    FLASK_AVAILABLE = False
 
 print("!!! ВСЕ ИМПОРТЫ ЗАГРУЖЕНЫ !!!")
 
 # ========== ВАШИ ДАННЫЕ ==========
-API_ID = int(os.getenv("API_ID", 36594021))
-API_HASH = os.getenv("API_HASH", "6dfedd148bf6bba5d4e67ed213178ebb")
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8297380746:AAHChWZNlbT-_pc70Nr3zUydC6BebI-ao9Q")
-
-print(f"✅ API_ID: {API_ID}")
-print(f"✅ BOT_TOKEN: {BOT_TOKEN[:10]}...")
+print("🔵 Загружаю переменные окружения...")
+try:
+    API_ID = int(os.getenv("API_ID", 36594021))
+    API_HASH = os.getenv("API_HASH", "6dfedd148bf6bba5d4e67ed213178ebb")
+    BOT_TOKEN = os.getenv("BOT_TOKEN", "8297380746:AAHChWZNlbT-_pc70Nr3zUydC6BebI-ao9Q")
+    print(f"✅ API_ID: {API_ID}")
+    print(f"✅ BOT_TOKEN: {BOT_TOKEN[:15]}...")
+    print(f"✅ API_HASH: {API_HASH[:10]}...")
+except Exception as e:
+    print(f"❌ Ошибка загрузки переменных: {e}")
+    traceback.print_exc()
+    sys.exit(1)
 
 # Настройки рассылки
 MESSAGE_TEXT = "qwerty"
@@ -43,11 +88,16 @@ USERS_FILE = os.path.join(DATA_DIR, "users.json")
 ADMINS_FILE = os.path.join(DATA_DIR, "admins.json")
 STATS_FILE = os.path.join(DATA_DIR, "stats.json")
 ACTIVE_SESSION_FILE = os.path.join(SESSIONS_DIR, "active_session.txt")
-# ==================================
 
-os.makedirs(SESSIONS_DIR, exist_ok=True)
-os.makedirs(DATA_DIR, exist_ok=True)
-print(f"📁 Папки созданы: {SESSIONS_DIR}, {DATA_DIR}")
+print("🔵 Создаю папки...")
+try:
+    os.makedirs(SESSIONS_DIR, exist_ok=True)
+    os.makedirs(DATA_DIR, exist_ok=True)
+    print(f"📁 Папки созданы: {SESSIONS_DIR}, {DATA_DIR}")
+except Exception as e:
+    print(f"❌ Ошибка создания папок: {e}")
+    traceback.print_exc()
+    sys.exit(1)
 
 # Глобальные переменные
 user_client = None
@@ -56,6 +106,7 @@ target_chat_ids = []
 auth_states = {}
 bot_client = None
 
+print("🔵 Определяю функции...")
 
 # ========== РАБОТА С АДМИНАМИ ==========
 def load_admins():
@@ -71,7 +122,6 @@ def load_admins():
         print(f"❌ Ошибка загрузки админов: {e}")
         return {1031953955: {"role": "owner", "added_by": "system", "added_at": datetime.now().isoformat()}}
 
-
 def save_admins(admins):
     try:
         with open(ADMINS_FILE, 'w', encoding='utf-8') as f:
@@ -81,16 +131,13 @@ def save_admins(admins):
         print(f"❌ Ошибка сохранения админов: {e}")
         return False
 
-
 def is_admin(user_id):
     admins = load_admins()
     return user_id in admins
 
-
 def is_owner(user_id):
     admins = load_admins()
     return user_id in admins and admins[user_id].get("role") == "owner"
-
 
 def add_admin(admin_id, added_by, username=None):
     admins = load_admins()
@@ -106,7 +153,6 @@ def add_admin(admin_id, added_by, username=None):
     save_admins(admins)
     return True, "Админ добавлен"
 
-
 def remove_admin(admin_id):
     admins = load_admins()
     if admin_id not in admins:
@@ -118,7 +164,6 @@ def remove_admin(admin_id):
     del admins[admin_id]
     save_admins(admins)
     return True, "Админ удалён"
-
 
 def get_admins_list():
     admins = load_admins()
@@ -133,7 +178,6 @@ def get_admins_list():
         })
     return result
 
-
 # ========== РАБОТА С ПОЛЬЗОВАТЕЛЯМИ ==========
 def load_users():
     try:
@@ -145,7 +189,6 @@ def load_users():
         print(f"❌ Ошибка загрузки пользователей: {e}")
         return {}
 
-
 def save_users(users):
     try:
         with open(USERS_FILE, 'w', encoding='utf-8') as f:
@@ -154,7 +197,6 @@ def save_users(users):
     except Exception as e:
         print(f"❌ Ошибка сохранения пользователей: {e}")
         return False
-
 
 def add_user(user_id, first_name, username=None):
     users = load_users()
@@ -175,7 +217,6 @@ def add_user(user_id, first_name, username=None):
         save_users(users)
         return False
 
-
 def get_stats():
     try:
         with open(STATS_FILE, 'r', encoding='utf-8') as f:
@@ -184,7 +225,6 @@ def get_stats():
         return {"messages_sent": 0, "broadcasts": 0}
     except:
         return {"messages_sent": 0, "broadcasts": 0}
-
 
 def update_stats(messages_count=0):
     stats = get_stats()
@@ -196,7 +236,6 @@ def update_stats(messages_count=0):
             json.dump(stats, f, indent=2)
     except:
         pass
-
 
 # ========== ВЕБ-СЕРВЕР ==========
 if FLASK_AVAILABLE:
@@ -252,6 +291,7 @@ else:
     def run_web_server():
         print("⚠️ Веб-сервер не запущен")
 
+print("✅ Все функции определены")
 
 # ========== ФУНКЦИИ УПРАВЛЕНИЯ СЕССИЯМИ ==========
 def save_active_session(session_name):
@@ -263,7 +303,6 @@ def save_active_session(session_name):
     except Exception as e:
         print(f"❌ Ошибка сохранения: {e}")
         return False
-
 
 def load_active_session():
     try:
@@ -277,7 +316,6 @@ def load_active_session():
         pass
     return None
 
-
 def get_session_files():
     session_files = glob.glob(os.path.join(SESSIONS_DIR, "*.session"))
     sessions = []
@@ -287,10 +325,8 @@ def get_session_files():
             sessions.append(basename)
     return sessions
 
-
 def get_session_path(session_name):
     return os.path.join(SESSIONS_DIR, session_name)
-
 
 def get_current_session_name():
     if user_client and hasattr(user_client, 'session') and user_client.session:
@@ -299,7 +335,6 @@ def get_current_session_name():
         except:
             return None
     return None
-
 
 async def force_close_current_session():
     global user_client
@@ -320,7 +355,6 @@ async def force_close_current_session():
             print("✅ Сессия закрыта")
         except:
             pass
-
 
 async def switch_to_session(session_name, event=None):
     global user_client
@@ -355,7 +389,6 @@ async def switch_to_session(session_name, event=None):
         print(msg)
         return False, msg
 
-
 async def delete_session(session_name, event):
     current = get_current_session_name()
     if current == session_name:
@@ -374,7 +407,6 @@ async def delete_session(session_name, event):
         await event.reply(f"❌ Ошибка: {e}")
         return False
 
-
 # ========== ФУНКЦИИ РАБОТЫ С ЧАТАМИ ==========
 def load_chat_ids_from_file():
     chat_ids = []
@@ -391,7 +423,6 @@ def load_chat_ids_from_file():
         pass
     return chat_ids
 
-
 def save_chat_ids_to_file(chat_ids):
     try:
         with open('chat.txt', 'w', encoding='utf-8') as f:
@@ -400,7 +431,6 @@ def save_chat_ids_to_file(chat_ids):
         return True
     except:
         return False
-
 
 async def convert_links_to_ids(links):
     results = []
@@ -427,7 +457,6 @@ async def convert_links_to_ids(links):
                 'success': False
             })
     return results, duplicates
-
 
 async def send_broadcast_to_chats(chat_ids, event):
     global is_broadcasting, user_client, MESSAGE_TEXT
@@ -474,7 +503,9 @@ async def send_broadcast_to_chats(chat_ids, event):
     await event.reply(f"✅ Завершено!\n✅ {success_count}\n❌ {fail_count}")
     update_stats(success_count)
 
+print("🔵 Все вспомогательные функции определены")
 
+# ========== ОСНОВНАЯ ФУНКЦИЯ MAIN ==========
 async def main():
     global user_client, MESSAGE_TEXT, bot_client, is_broadcasting
     
@@ -482,9 +513,13 @@ async def main():
     
     # Запускаем веб-сервер
     print("🌐 Запуск веб-сервера...")
-    web_thread = Thread(target=run_web_server, daemon=True)
-    web_thread.start()
-    print("✅ Веб-сервер запущен")
+    try:
+        web_thread = Thread(target=run_web_server, daemon=True)
+        web_thread.start()
+        print("✅ Веб-сервер запущен")
+    except Exception as e:
+        print(f"❌ Ошибка запуска веб-сервера: {e}")
+        traceback.print_exc()
     
     await asyncio.sleep(2)
     print("🔵 2. После задержки")
@@ -511,6 +546,7 @@ async def main():
                 return
         except Exception as e:
             print(f"❌ Ошибка запуска бота: {e}")
+            traceback.print_exc()
             return
     
     print("🔵 3. Бот создан")
@@ -695,7 +731,7 @@ async def main():
             buttons = []
             for s in sessions:
                 if s == current:
-                    buttons.append([Button.text(f"✅ {s} (активна)")])
+                    buttons.append([Button.text(f"✅ {s} (активна)")]
                 else:
                     buttons.append([Button.text(f"🔑 {s}"), Button.text(f"🗑️ {s}")])
             if not sessions:
@@ -798,11 +834,4 @@ async def main():
                 update_stats(success)
                 del auth_states[user_id]
             
-            elif state['step'] == 'awaiting_phone' and text.startswith('+'):
-                phone = text
-                state['phone'] = phone
-                state['step'] = 'awaiting_code'
-                temp_path = os.path.join(SESSIONS_DIR, f'temp_{user_id}')
-                temp = TelegramClient(temp_path, API_ID, API_HASH)
-                await temp.connect()
-                state['temp']
+            elif state['step'] ==
