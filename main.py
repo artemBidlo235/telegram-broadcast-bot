@@ -731,7 +731,7 @@ async def main():
             buttons = []
             for s in sessions:
                 if s == current:
-                    buttons.append([Button.text(f"✅ {s} (активна)")]
+                    buttons.append([Button.text(f"✅ {s} (активна)")])
                 else:
                     buttons.append([Button.text(f"🔑 {s}"), Button.text(f"🗑️ {s}")])
             if not sessions:
