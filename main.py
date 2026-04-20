@@ -521,10 +521,11 @@ async def main():
         [Button.text("ℹ️ О боте")]
     ]
     
-    # Меню для администратора (полная версия) с ДОБАВЛЕННЫМИ КНОПКАМИ
+    # ПРАВИЛЬНОЕ меню для администратора (Telethon) с inline-кнопками
     admin_menu_buttons = [
-        [Button.text("⚙️ Настройки софта"), Button.text("📢 Рассылка")],
-        [Button.text("🛠 Admin панель")],
+        [Button.inline("⚙️ Настройки софта", b"soft_settings")],
+        [Button.inline("📢 Рассылка", b"newsletter")],
+        [Button.inline("🛠 Admin панель", b"admin_panel")],
         [Button.text("📋 Запустить рассылку (по чатам)")],
         [Button.text("📢 Рассылка пользователям")],
         [Button.text("🔄 Поменять базу чатов")],
@@ -545,7 +546,33 @@ async def main():
     
     print("🔵 5. Регистрирую обработчики...")
     
-    # ========== ОБРАБОТЧИКИ ==========
+    # ========== ОБРАБОТЧИК INLINE-КНОПОК (ДОБАВЛЕН) ==========
+    @bot_client.on(events.CallbackQuery)
+    async def callback_handler(event):
+        user_id = event.sender_id
+        data = event.data.decode()
+        
+        # Проверяем, является ли пользователь админом
+        if not is_admin(user_id):
+            await event.answer("❌ У вас нет доступа к этой функции!", alert=True)
+            return
+        
+        # Подтверждаем нажатие (убираем "часики")
+        await event.answer()
+        
+        if data == "soft_settings":
+            await event.edit(f"⚙️ **Настройки софта**\n\nЗдесь будут параметры:\n• Скорость рассылки\n• Тайминги\n• Другие настройки\n\n(Функционал в разработке)", 
+                             buttons=admin_menu_buttons)
+        
+        elif data == "newsletter":
+            await event.edit(f"📢 **Рассылка**\n\nВыберите тип рассылки в разделе 'Admin панель'.\n\n(Функционал в разработке)", 
+                             buttons=admin_menu_buttons)
+        
+        elif data == "admin_panel":
+            await event.edit(f"🛠 **Admin панель**\n\nПолный список команд администратора:\n\n• Запустить рассылку (по чатам)\n• Рассылка пользователям\n• Поменять базу чатов\n• Сменить текст / Остановить\n• Статус / Логин\n• Управление сессиями\n• Пользователи\n• Управление админами\n• Статистика\n\n(Функционал в разработке)", 
+                             buttons=admin_menu_buttons)
+    
+    # ========== ОСНОВНЫЕ ОБРАБОТЧИКИ ==========
     
     @bot_client.on(events.NewMessage(pattern='/start'))
     async def start_handler(event):
@@ -557,9 +584,12 @@ async def main():
         
         if is_admin(user_id):
             role = "Владелец" if is_owner(user_id) else "Администратор"
-            await event.reply(f"👋 Привет, {first_name}!\n\n👑 Ваша роль: {role}\n\n✅ Вам доступны все функции бота.", buttons=admin_menu_buttons)
+            # Используем правильный формат отправки с inline-кнопками
+            await event.reply(f"👋 Привет, {first_name}!\n\n👑 Ваша роль: {role}\n\n✅ Вам доступны все функции бота.", 
+                              buttons=admin_menu_buttons)
         else:
-            await event.reply(f"👋 Привет, {first_name}!\n\n✅ Вы зарегистрированы как пользователь.\n\nОжидайте сообщений от администратора.", buttons=user_menu_buttons)
+            await event.reply(f"👋 Привет, {first_name}!\n\n✅ Вы зарегистрированы как пользователь.\n\nОжидайте сообщений от администратора.", 
+                              buttons=user_menu_buttons)
     
     @bot_client.on(events.NewMessage)
     async def unified_handler(event):
@@ -586,20 +616,8 @@ async def main():
         
         # ========== АДМИН-ФУНКЦИИ ==========
         
-        # --- НОВЫЕ КНОПКИ (ЗАГЛУШКИ) ---
-        if text == "⚙️ Настройки софта":
-            await event.reply("⚙️ **Настройки софта**\n\nЗдесь будут параметры:\n• Скорость рассылки\n• Тайминги\n• Другие настройки\n\n(Функционал в разработке)", buttons=admin_menu_buttons)
-        
-        elif text == "📢 Рассылка":
-            await event.reply("📢 **Рассылка**\n\nВыберите тип рассылки в разделе 'Admin панель'.\n\n(Функционал в разработке)", buttons=admin_menu_buttons)
-        
-        elif text == "🛠 Admin панель":
-            await event.reply("🛠 **Admin панель**\n\nПолный список команд администратора:\n\n• Запустить рассылку (по чатам)\n• Рассылка пользователям\n• Поменять базу чатов\n• Сменить текст / Остановить\n• Статус / Логин\n• Управление сессиями\n• Пользователи\n• Управление админами\n• Статистика\n\n(Функционал в разработке)", buttons=admin_menu_buttons)
-        
-        # --- СУЩЕСТВУЮЩИЕ ФУНКЦИИ ---
-        
         # Управление админами (только для владельца)
-        elif text == "👑 Управление админами":
+        if text == "👑 Управление админами":
             if not is_owner(user_id):
                 await event.reply("❌ Только владелец может управлять администраторами!", buttons=admin_menu_buttons)
                 return
@@ -840,12 +858,4 @@ async def main():
             elif state['step'] == 'awaiting_chat_links' and text != "❌ Отмена":
                 links = [l.strip() for l in text.split('\n') if l.strip()]
                 if not links:
-                    await event.reply("❌ Пустой список", buttons=[[Button.text("❌ Отмена")]])
-                    return
-                await event.reply(f"🔄 Обрабатываю {len(links)} ссылок...")
-                results, dups = await convert_links_to_ids(links)
-                ok = [r for r in results if r['success']]
-                bad = [r for r in results if not r['success']]
-                if ok:
-                    ids = [r['id'] for r in ok]
-                    save_chat_ids_to_file
+                   
