@@ -521,7 +521,7 @@ async def main():
         [Button.text("ℹ️ О боте")]
     ]
     
-    # ПРАВИЛЬНОЕ меню для администратора (Telethon) с inline-кнопками
+    # ПРАВИЛЬНОЕ меню для администратора с inline-кнопками
     admin_menu_buttons = [
         [Button.inline("⚙️ Настройки софта", b"soft_settings")],
         [Button.inline("📢 Рассылка", b"newsletter")],
@@ -546,30 +546,26 @@ async def main():
     
     print("🔵 5. Регистрирую обработчики...")
     
-    # ========== ОБРАБОТЧИК INLINE-КНОПОК (ДОБАВЛЕН) ==========
+    # ========== ОБРАБОТЧИК INLINE-КНОПОК ==========
     @bot_client.on(events.CallbackQuery)
     async def callback_handler(event):
         user_id = event.sender_id
         data = event.data.decode()
         
-        # Проверяем, является ли пользователь админом
         if not is_admin(user_id):
-            await event.answer("❌ У вас нет доступа к этой функции!", alert=True)
+            await event.answer("❌ У вас нет доступа!", alert=True)
             return
         
-        # Подтверждаем нажатие (убираем "часики")
         await event.answer()
         
         if data == "soft_settings":
-            await event.edit(f"⚙️ **Настройки софта**\n\nЗдесь будут параметры:\n• Скорость рассылки\n• Тайминги\n• Другие настройки\n\n(Функционал в разработке)", 
+            await event.edit(f"⚙️ **Настройки софта**\n\nЗдесь будут параметры:\n• Скорость рассылки\n• Тайминги\n\n(Функционал в разработке)", 
                              buttons=admin_menu_buttons)
-        
         elif data == "newsletter":
             await event.edit(f"📢 **Рассылка**\n\nВыберите тип рассылки в разделе 'Admin панель'.\n\n(Функционал в разработке)", 
                              buttons=admin_menu_buttons)
-        
         elif data == "admin_panel":
-            await event.edit(f"🛠 **Admin панель**\n\nПолный список команд администратора:\n\n• Запустить рассылку (по чатам)\n• Рассылка пользователям\n• Поменять базу чатов\n• Сменить текст / Остановить\n• Статус / Логин\n• Управление сессиями\n• Пользователи\n• Управление админами\n• Статистика\n\n(Функционал в разработке)", 
+            await event.edit(f"🛠 **Admin панель**\n\nПолный список команд администратора\n\n(Функционал в разработке)", 
                              buttons=admin_menu_buttons)
     
     # ========== ОСНОВНЫЕ ОБРАБОТЧИКИ ==========
@@ -584,7 +580,6 @@ async def main():
         
         if is_admin(user_id):
             role = "Владелец" if is_owner(user_id) else "Администратор"
-            # Используем правильный формат отправки с inline-кнопками
             await event.reply(f"👋 Привет, {first_name}!\n\n👑 Ваша роль: {role}\n\n✅ Вам доступны все функции бота.", 
                               buttons=admin_menu_buttons)
         else:
@@ -600,11 +595,9 @@ async def main():
         
         print(f"📨 Получено: {text} от {user_id}")
         
-        # Добавляем пользователя в базу
         if not text.startswith('/'):
             add_user(user_id, event.sender.first_name, event.sender.username)
         
-        # Не админ - только простые команды
         if not is_admin(user_id):
             if text == "📊 Статус" or text == "/status":
                 stats = get_stats()
@@ -614,9 +607,7 @@ async def main():
                 await event.reply("🤖 Бот для управления рассылками\nВерсия: 2.0")
             return
         
-        # ========== АДМИН-ФУНКЦИИ ==========
-        
-        # Управление админами (только для владельца)
+        # АДМИН-ФУНКЦИИ
         if text == "👑 Управление админами":
             if not is_owner(user_id):
                 await event.reply("❌ Только владелец может управлять администраторами!", buttons=admin_menu_buttons)
@@ -646,7 +637,6 @@ async def main():
             auth_states[user_id] = {'step': 'removing_admin'}
             await event.reply("👑 Введите ID администратора для удаления:", buttons=[[Button.text("❌ Отмена")]])
         
-        # Основные функции
         elif text == "📋 Запустить рассылку (по чатам)":
             if not user_client or not user_client.is_connected():
                 await event.reply("❌ Авторизуйтесь: 🔑 Логин", buttons=admin_menu_buttons)
@@ -765,7 +755,6 @@ async def main():
         elif user_id in auth_states:
             state = auth_states[user_id]
             
-            # Добавление админа
             if state['step'] == 'adding_admin' and text != "❌ Отмена":
                 try:
                     new_admin_id = int(text.strip())
@@ -783,7 +772,6 @@ async def main():
                     await event.reply("❌ Неверный формат ID", buttons=admin_menu_buttons)
                     del auth_states[user_id]
             
-            # Удаление админа
             elif state['step'] == 'removing_admin' and text != "❌ Отмена":
                 try:
                     admin_id = int(text.strip())
@@ -794,7 +782,6 @@ async def main():
                     await event.reply("❌ Неверный формат ID", buttons=admin_menu_buttons)
                     del auth_states[user_id]
             
-            # Рассылка пользователям
             elif state['step'] == 'broadcast_to_users' and text != "❌ Отмена":
                 users = load_users()
                 success = 0
@@ -811,7 +798,6 @@ async def main():
                 update_stats(success)
                 del auth_states[user_id]
             
-            # Логин по телефону
             elif state['step'] == 'awaiting_phone' and text.startswith('+'):
                 phone = text
                 state['phone'] = phone
@@ -819,43 +805,4 @@ async def main():
                 temp_path = os.path.join(SESSIONS_DIR, f'temp_{user_id}')
                 temp = TelegramClient(temp_path, API_ID, API_HASH)
                 await temp.connect()
-                state['temp'] = temp
-                try:
-                    result = await temp.send_code_request(phone)
-                    state['hash'] = result.phone_code_hash
-                    await event.reply("🔑 Введите код из Telegram", buttons=[[Button.text("❌ Отмена")]])
-                except Exception as e:
-                    await event.reply(f"❌ {e}", buttons=admin_menu_buttons)
-                    del auth_states[user_id]
-            
-            elif state['step'] == 'awaiting_code' and text.isdigit() and len(text) == 5:
-                code = text
-                temp = state['temp']
-                try:
-                    await temp.sign_in(phone=state['phone'], code=code, phone_code_hash=state['hash'])
-                    user_client = temp
-                    me = await user_client.get_me()
-                    session_name = f"{me.first_name}_{state['phone'][-5:]}.session"
-                    session_path = os.path.join(SESSIONS_DIR, session_name)
-                    temp_path = os.path.join(SESSIONS_DIR, f'temp_{user_id}.session')
-                    if os.path.exists(session_path):
-                        await user_client.disconnect()
-                        os.remove(temp_path)
-                        await switch_to_session(session_name)
-                        await event.reply(f"✅ Вход выполнен: {me.first_name}", buttons=admin_menu_buttons)
-                    else:
-                        await user_client.disconnect()
-                        await asyncio.sleep(0.5)
-                        os.rename(temp_path, session_path)
-                        await switch_to_session(session_name)
-                        await event.reply(f"✅ Авторизован: {me.first_name}", buttons=admin_menu_buttons)
-                    del auth_states[user_id]
-                except Exception as e:
-                    await event.reply(f"❌ Ошибка: {e}", buttons=admin_menu_buttons)
-                    del auth_states[user_id]
-            
-            # Конвертация ссылок в ID
-            elif state['step'] == 'awaiting_chat_links' and text != "❌ Отмена":
-                links = [l.strip() for l in text.split('\n') if l.strip()]
-                if not links:
-                   
+                state['temp']
